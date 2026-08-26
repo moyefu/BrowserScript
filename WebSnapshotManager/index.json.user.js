@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网站快照存储与恢复助手
 // @namespace    https://github.com/moyefu/BrowserScript/WebSnapshotManager
-// @version      1.2.1
+// @version      1.2.0
 // @description  针对指定网站实现快照（Cookie、LocalStorage、SessionStorage）的一键存储、命名、加密备份、二维码生成/扫码与一键恢复
 // @author       MOYEFU
 // @icon         https://pic1.imgdb.cn/i/034D4F8VwYLLoU73kkQs3l.gif
@@ -16,6 +16,8 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_cookie
 // @grant        GM_setClipboard
+// @grant        GM_xmlhttpRequest
+// @connect      api.github.com
 // @require      https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js
 // @require      https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js
 // @tag          MOYEFU
@@ -48,6 +50,26 @@ Config:
     description: 恢复快照成功后直接刷新或跳转至来源页面（不再弹窗确认）
     type: checkbox
     default: false
+  enable_gist_sync:
+    title: GitHub Gist 云同步
+    description: 启用通过 GitHub Private Gist 实现多设备跨端快照及规则自动同步
+    type: checkbox
+    default: false
+  gist_token:
+    title: GitHub Token (PAT)
+    description: 具有 gist 权限的 GitHub Personal Access Token (例如 ghp_xxxx)
+    type: text
+    default: ""
+  gist_id:
+    title: Gist ID (可选)
+    description: 绑定的 Gist ID。留空时首次同步将自动创建专属私有 Gist 并自动填充；其他设备填入相同 ID 即可绑定
+    type: text
+    default: ""
+  auto_sync_on_change:
+    title: 快照变更自动同步
+    description: 保存、重命名、删除或导入快照时自动触发云端同步
+    type: checkbox
+    default: true
 ==/UserConfig== */
 
 // 全局暴露的 UI 实例，供菜单命令与外部调度使用
@@ -154,6 +176,20 @@ function getFilterMode() {
     const reloadText = isAutoReload ? "🔄 恢复后【自动刷新/跳转】 (点击切换为不刷新)" : "⏸️ 恢复后【不默认刷新】 (点击切换为自动刷新)";
     GM_registerMenuCommand(reloadText, () => {
       showToggleAutoReloadDialog();
+    });
+
+    // 6. 立即同步到 Gist
+    GM_registerMenuCommand("☁️ 立即同步快照到 Gist 云端", () => {
+      if (!GistSyncManager.isEnabled() || !GistSyncManager.getToken()) {
+        showGistSyncDialog();
+      } else {
+        GistSyncManager.sync({ silent: false });
+      }
+    });
+
+    // 7. Gist 云同步设置
+    GM_registerMenuCommand("⚙️ GitHub Gist 云同步设置", () => {
+      showGistSyncDialog();
     });
   }
 
@@ -791,6 +827,633 @@ function showToggleAutoReloadDialog() {
   document.documentElement.appendChild(mask);
 }
 
+// ---------------------------------------------------------------------------
+// 全局通用 Toast 提示
+// ---------------------------------------------------------------------------
+function showToastGlobal(msg, type = "info") {
+  if (LSM_UI && typeof LSM_UI.showToast === "function") {
+    LSM_UI.showToast(msg, type);
+    return;
+  }
+  let t = document.getElementById("lsm-global-toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "lsm-global-toast";
+    t.style.cssText =
+      "position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#0f172a;color:#ffffff;" +
+      "padding:9px 18px;border-radius:10px;font-size:12.5px;font-weight:500;box-shadow:0 10px 25px -5px rgba(15,23,42,0.3);" +
+      "z-index:2147483647;transition:all 0.25s cubic-bezier(0.16,1,0.3,1);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;";
+    document.documentElement.appendChild(t);
+  }
+  if (type === "success") t.style.background = "#059669";
+  else if (type === "error") t.style.background = "#dc2626";
+  else t.style.background = "#0f172a";
+  t.textContent = msg;
+  t.style.display = "block";
+  t.style.opacity = "1";
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => {
+    t.style.opacity = "0";
+    setTimeout(() => {
+      t.style.display = "none";
+    }, 250);
+  }, 3000);
+}
+
+// =========================================================================
+// GitHub Gist 云同步引擎 (跨设备全量智能双向同步)
+// =========================================================================
+const GistSyncManager = {
+  syncDebounceTimer: null,
+  isSyncing: false,
+  lastSyncTime: GM_getValue("LSM_LAST_GIST_SYNC_TIME", 0),
+
+  isEnabled() {
+    return !!GM_getValue("Config.enable_gist_sync", false);
+  },
+
+  getToken() {
+    return String(GM_getValue("Config.gist_token", "") || "").trim();
+  },
+
+  getGistId() {
+    return String(GM_getValue("Config.gist_id", "") || "").trim();
+  },
+
+  isAutoSyncOnChange() {
+    return !!GM_getValue("Config.auto_sync_on_change", true);
+  },
+
+  // 防抖触发自动同步
+  triggerAutoSync(delay = 2000) {
+    if (!this.isEnabled() || !this.getToken() || !this.isAutoSyncOnChange()) return;
+    if (this.syncDebounceTimer) clearTimeout(this.syncDebounceTimer);
+    this.syncDebounceTimer = setTimeout(() => {
+      this.sync({ silent: true }).catch((err) => {
+        console.warn("[LSM GistSync] 自动同步异常:", err);
+      });
+    }, delay);
+  },
+
+  // GM_xmlhttpRequest 异步 Promise 封装
+  request(options) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== "function") {
+        reject(new Error("当前运行环境未授予 GM_xmlhttpRequest 权限，请在扩展设置中检查"));
+        return;
+      }
+      GM_xmlhttpRequest({
+        timeout: 20000,
+        ...options,
+        headers: {
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          ...(options.headers || {})
+        },
+        onload: (res) => {
+          if (res.status >= 200 && res.status < 300) {
+            try {
+              const data = res.responseText ? JSON.parse(res.responseText) : null;
+              resolve(data);
+            } catch (e) {
+              resolve(res.responseText);
+            }
+          } else {
+            let errMsg = `GitHub API 请求失败 (${res.status})`;
+            try {
+              const errObj = JSON.parse(res.responseText);
+              if (errObj && errObj.message) errMsg += `: ${errObj.message}`;
+            } catch (e) {}
+            reject(new Error(errMsg));
+          }
+        },
+        onerror: (err) => reject(new Error("网络连接失败，请检查网络或 GitHub 代理设置")),
+        ontimeout: () => reject(new Error("请求 GitHub API 超时，请检查网络"))
+      });
+    });
+  },
+
+  // 获取所有本地快照全量数据
+  getLocalFullData() {
+    let allKeys = [];
+    try {
+      if (typeof GM_listValues === "function") {
+        allKeys = GM_listValues() || [];
+      }
+    } catch (e) {}
+    if (!allKeys || !allKeys.length) {
+      allKeys = [`SESSION_DATA_${location.hostname}`];
+    }
+
+    const snapshots = {};
+    for (const key of allKeys) {
+      if (typeof key === "string" && key.startsWith("SESSION_DATA_")) {
+        const domain = key.replace("SESSION_DATA_", "");
+        const records = GM_getValue(key, []);
+        if (Array.isArray(records) && records.length > 0) {
+          snapshots[domain] = records;
+        }
+      }
+    }
+
+    let hostListRaw = GM_getValue("Config.host_list", null);
+    if (hostListRaw === null || hostListRaw === undefined) {
+      hostListRaw = GM_getValue("Config.show_host", "");
+    }
+
+    return {
+      version: "1.2.0",
+      updatedAt: Date.now(),
+      config: {
+        filter_mode: GM_getValue("Config.filter_mode", "whitelist"),
+        host_list: String(hostListRaw || ""),
+        enable_encryption: GM_getValue("Config.enable_encryption", false),
+        auto_reload_after_restore: GM_getValue("Config.auto_reload_after_restore", false)
+      },
+      snapshots: snapshots
+    };
+  },
+
+  // 创建私有 Gist
+  async createGist(token, initialData) {
+    const fileName = "web_snapshots_backup.json";
+    const body = {
+      description: "网站快照存储与恢复助手 - 跨设备全量云备份 (Private)",
+      public: false,
+      files: {
+        [fileName]: {
+          content: JSON.stringify(initialData, null, 2)
+        }
+      }
+    };
+    const res = await this.request({
+      method: "POST",
+      url: "https://api.github.com/gists",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      data: JSON.stringify(body)
+    });
+    if (!res || !res.id) {
+      throw new Error("创建 Gist 失败，未能获取新 Gist ID");
+    }
+    return res.id;
+  },
+
+  // 获取云端 Gist 数据
+  async fetchGist(token, gistId) {
+    const res = await this.request({
+      method: "GET",
+      url: `https://api.github.com/gists/${gistId}`,
+      headers: {
+        "Authorization": `Bearer ${token}`
+      }
+    });
+    if (!res || !res.files) {
+      throw new Error("未能获取 Gist 数据或 Gist 格式不正确");
+    }
+    const fileKey = Object.keys(res.files).find((k) => k.endsWith(".json")) || Object.keys(res.files)[0];
+    const fileObj = res.files[fileKey];
+    if (!fileObj) throw new Error("Gist 中未找到快照备份文件");
+
+    let contentStr = fileObj.content;
+    if (fileObj.truncated && fileObj.raw_url) {
+      contentStr = await this.request({
+        method: "GET",
+        url: fileObj.raw_url,
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      if (typeof contentStr === "object") return contentStr;
+    }
+    if (!contentStr) return null;
+    return typeof contentStr === "string" ? JSON.parse(contentStr) : contentStr;
+  },
+
+  // 更新云端 Gist
+  async updateGist(token, gistId, data) {
+    const fileName = "web_snapshots_backup.json";
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const timeStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const body = {
+      description: `网站快照存储与恢复助手 - 跨设备云备份 (最后同步: ${timeStr})`,
+      files: {
+        [fileName]: {
+          content: JSON.stringify(data, null, 2)
+        }
+      }
+    };
+    await this.request({
+      method: "PATCH",
+      url: `https://api.github.com/gists/${gistId}`,
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      data: JSON.stringify(body)
+    });
+  },
+
+  // 自动从用户 GitHub 账号检索已有的备份 Gist
+  async findExistingGist(token) {
+    try {
+      const gists = await this.request({
+        method: "GET",
+        url: "https://api.github.com/gists?per_page=100",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (Array.isArray(gists)) {
+        const found = gists.find((g) => {
+          if (g.files && g.files["web_snapshots_backup.json"]) return true;
+          if (g.description && g.description.includes("网站快照存储与恢复助手")) return true;
+          return false;
+        });
+        if (found && found.id) {
+          return found.id;
+        }
+      }
+    } catch (e) {
+      console.warn("[LSM GistSync] 自动查找已有 Gist 失败:", e);
+    }
+    return null;
+  },
+
+  // 核心智能双向合并同步
+  async sync(options = {}) {
+    if (this.isSyncing) {
+      if (!options.silent) showToastGlobal("正在同步中，请稍候...", "info");
+      return;
+    }
+
+    const token = this.getToken();
+    if (!token) {
+      if (!options.silent) showToastGlobal("请先在 Gist 设置中填写 GitHub Token", "error");
+      return;
+    }
+
+    this.isSyncing = true;
+    this.updateUIStatus("syncing");
+
+    try {
+      let gistId = this.getGistId();
+      const localData = this.getLocalFullData();
+
+      // 1. 若没有 Gist ID，先尝试在 GitHub 账号中自动检索是否已有历史备份
+      if (!gistId) {
+        if (!options.silent) showToastGlobal("正在云端查找已有备份...", "info");
+        const existingId = await this.findExistingGist(token);
+        if (existingId) {
+          gistId = existingId;
+          GM_setValue("Config.gist_id", gistId);
+          if (!options.silent) showToastGlobal(`已自动找到并绑定已有云备份 (ID: ${gistId.slice(0, 8)}...)`, "success");
+        } else {
+          // 账号下没有备份则创建新的私有 Gist
+          if (!options.silent) showToastGlobal("未找到已有备份，正在创建私有 Gist...", "info");
+          gistId = await this.createGist(token, localData);
+          GM_setValue("Config.gist_id", gistId);
+          this.lastSyncTime = Date.now();
+          GM_setValue("LSM_LAST_GIST_SYNC_TIME", this.lastSyncTime);
+          this.updateUIStatus("success");
+          if (!options.silent) showToastGlobal(`Gist 云备份已创建！ID: ${gistId.slice(0, 8)}...`, "success");
+          return { success: true, gistId, created: true };
+        }
+      }
+
+      // 2. 拉取云端数据
+      let remoteData = null;
+      try {
+        remoteData = await this.fetchGist(token, gistId);
+      } catch (err) {
+        if (String(err.message).includes("404")) {
+          // 尝试重新检索或创建
+          const reFound = await this.findExistingGist(token);
+          if (reFound && reFound !== gistId) {
+            gistId = reFound;
+            GM_setValue("Config.gist_id", gistId);
+            remoteData = await this.fetchGist(token, gistId);
+          } else {
+            gistId = await this.createGist(token, localData);
+            GM_setValue("Config.gist_id", gistId);
+            this.lastSyncTime = Date.now();
+            GM_setValue("LSM_LAST_GIST_SYNC_TIME", this.lastSyncTime);
+            this.updateUIStatus("success");
+            if (!options.silent) showToastGlobal("原 Gist 未找到，已自动重新创建", "success");
+            return { success: true, gistId, recreated: true };
+          }
+        } else {
+          throw err;
+        }
+      }
+
+      if (!remoteData || typeof remoteData !== "object") {
+        remoteData = { snapshots: {}, config: {} };
+      }
+
+      // 3. 执行智能双向增量合并
+      const remoteSnapshots = remoteData.snapshots || {};
+      const localSnapshots = localData.snapshots || {};
+      const allDomains = Array.from(new Set([...Object.keys(localSnapshots), ...Object.keys(remoteSnapshots)]));
+
+      const mergedSnapshots = {};
+      let totalMergedCount = 0;
+
+      for (const domain of allDomains) {
+        const localList = localSnapshots[domain] || [];
+        const remoteList = remoteSnapshots[domain] || [];
+
+        const recordMap = new Map();
+
+        for (const item of localList) {
+          if (item && item.id) {
+            recordMap.set(item.id, item);
+          }
+        }
+
+        for (const rItem of remoteList) {
+          if (!rItem || !rItem.id) continue;
+          if (!recordMap.has(rItem.id)) {
+            recordMap.set(rItem.id, rItem);
+          } else {
+            const lItem = recordMap.get(rItem.id);
+            const rTime = rItem.updatedAt || rItem.createdAt || 0;
+            const lTime = lItem.updatedAt || lItem.createdAt || 0;
+            if (rTime > lTime) {
+              recordMap.set(rItem.id, rItem);
+            }
+          }
+        }
+
+        const domainMergedList = Array.from(recordMap.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        mergedSnapshots[domain] = domainMergedList;
+        totalMergedCount += domainMergedList.length;
+
+        // 写入本地存储
+        GM_setValue(`SESSION_DATA_${domain}`, domainMergedList);
+      }
+
+      // 合并域名规则列表
+      const localHostLines = String(localData.config.host_list || "").split("\n").map((s) => s.trim()).filter(Boolean);
+      const remoteHostLines = String(remoteData.config?.host_list || "").split("\n").map((s) => s.trim()).filter(Boolean);
+      const mergedHostLines = Array.from(new Set([...localHostLines, ...remoteHostLines]));
+      const mergedHostStr = mergedHostLines.join("\n");
+      GM_setValue("Config.host_list", mergedHostStr);
+
+      const mergedFullData = {
+        version: "1.2.0",
+        updatedAt: Date.now(),
+        config: {
+          filter_mode: localData.config.filter_mode || remoteData.config?.filter_mode || "whitelist",
+          host_list: mergedHostStr,
+          enable_encryption: localData.config.enable_encryption,
+          auto_reload_after_restore: localData.config.auto_reload_after_restore
+        },
+        snapshots: mergedSnapshots
+      };
+
+      // 4. 将合并后的全量数据回写至云端 Gist
+      await this.updateGist(token, gistId, mergedFullData);
+
+      this.lastSyncTime = Date.now();
+      GM_setValue("LSM_LAST_GIST_SYNC_TIME", this.lastSyncTime);
+      this.updateUIStatus("success");
+
+      if (LSM_UI && typeof LSM_UI.refreshList === "function") {
+        LSM_UI.refreshList();
+      }
+
+      if (!options.silent) {
+        showToastGlobal(`☁️ Gist 云同步完成 (共 ${totalMergedCount} 条快照)`, "success");
+      }
+      return { success: true, gistId, count: totalMergedCount };
+    } catch (err) {
+      this.updateUIStatus("error");
+      console.error("[LSM GistSync] 同步异常:", err);
+      if (!options.silent) {
+        showToastGlobal(`云同步失败: ${err.message}`, "error");
+      }
+      throw err;
+    } finally {
+      this.isSyncing = false;
+    }
+  },
+
+  updateUIStatus(status) {
+    if (LSM_UI && typeof LSM_UI.updateGistStatus === "function") {
+      LSM_UI.updateGistStatus(status);
+    }
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 菜单命令弹窗：5. GitHub Gist 云同步设置弹窗
+// ---------------------------------------------------------------------------
+function showGistSyncDialog() {
+  if (document.querySelector(".lsm-dlg-mask")) return;
+  ensureHostAnimationStyle();
+
+  const isEnabled = GM_getValue("Config.enable_gist_sync", false);
+  const token = GM_getValue("Config.gist_token", "");
+  const gistId = GM_getValue("Config.gist_id", "");
+  const autoSync = GM_getValue("Config.auto_sync_on_change", true);
+  const lastSync = GM_getValue("LSM_LAST_GIST_SYNC_TIME", 0);
+
+  const escapeHtml = (str) => {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  };
+
+  const formatTime = (timestamp) => {
+    if (!timestamp) return "-";
+    const d = new Date(timestamp);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+
+  const mask = document.createElement("div");
+  mask.className = "lsm-dlg-mask";
+  mask.style.cssText =
+    "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,0.55);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);" +
+    "display:flex;align-items:center;justify-content:center;overscroll-behavior:contain;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;";
+  bindScrollLock(mask, "input");
+
+  const box = document.createElement("div");
+  box.style.cssText =
+    "width:420px;max-width:calc(100vw - 40px);background:#ffffff;border-radius:16px;" +
+    "padding:24px;box-shadow:0 20px 45px -10px rgba(15,23,42,0.25),0 0 0 1px rgba(15,23,42,0.06);box-sizing:border-box;animation:lsmFadeIn .2s ease-out;";
+
+  const title = document.createElement("div");
+  title.innerHTML = "☁️ <span style='color:#0f172a;font-size:16px;font-weight:700;'>GitHub Gist 云同步设置</span>";
+  title.style.cssText = "margin-bottom:8px;display:flex;align-items:center;gap:6px;";
+
+  const desc = document.createElement("div");
+  desc.innerHTML =
+    "使用 GitHub Private Gist 实现多设备全量快照与规则双向同步。<br>" +
+    "<a href='https://github.com/settings/tokens/new?scopes=gist&description=WebSnapshotManager' target='_blank' rel='noopener' style='color:#2563eb;text-decoration:underline;display:inline-flex;align-items:center;gap:4px;margin-top:4px;'>🔗 点击快速生成包含 gist 权限的 GitHub Token</a>";
+  desc.style.cssText = "font-size:12px;color:#64748b;line-height:1.5;margin-bottom:14px;";
+
+  const form = document.createElement("div");
+  form.style.cssText = "display:flex;flex-direction:column;gap:12px;margin-bottom:18px;";
+
+  // 1. 启用开关
+  const enableRow = document.createElement("label");
+  enableRow.style.cssText =
+    "display:flex;align-items:center;justify-content:space-between;cursor:pointer;background:#f8fafc;padding:10px 12px;border-radius:10px;border:1px solid #e2e8f0;";
+  enableRow.innerHTML = `
+    <div>
+      <div style="font-weight:600;font-size:13px;color:#0f172a;">启用 Gist 云同步</div>
+      <div style="font-size:11px;color:#64748b;">开启多设备跨端云同步漫游</div>
+    </div>
+    <input type="checkbox" id="lsm-cfg-enable-gist" ${isEnabled ? "checked" : ""} style="width:18px;height:18px;cursor:pointer;">
+  `;
+
+  // 2. Token 输入
+  const tokenBox = document.createElement("div");
+  tokenBox.innerHTML = `
+    <label style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:4px;">GitHub Personal Access Token (PAT)</label>
+    <input type="password" id="lsm-cfg-gist-token" value="${escapeHtml(token)}" placeholder="ghp_xxxx 或 github_pat_xxxx" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;outline:none;">
+  `;
+
+  // 3. Gist ID
+  const gistIdBox = document.createElement("div");
+  gistIdBox.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+      <label style="font-size:12px;font-weight:600;color:#334155;">Gist ID (多端绑定 / 留空自动新建)</label>
+      <button type="button" id="lsm-btn-auto-find-gist" style="border:none;background:none;color:#2563eb;font-size:11.5px;cursor:pointer;padding:0;text-decoration:underline;">🔍 自动查找账号中的备份</button>
+    </div>
+    <input type="text" id="lsm-cfg-gist-id" value="${escapeHtml(gistId)}" placeholder="留空则首次同步自动创建并回填" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;outline:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#94a3b8;margin-top:4px;">
+      <span>💡 忘记 ID？留空直接同步，脚本会自动找回</span>
+      <a href="https://gist.github.com" target="_blank" rel="noopener" style="color:#64748b;text-decoration:underline;">在 GitHub Gist 查看</a>
+    </div>
+  `;
+
+  // 4. 自动同步
+  const autoSyncRow = document.createElement("label");
+  autoSyncRow.style.cssText =
+    "display:flex;align-items:center;justify-content:space-between;cursor:pointer;background:#f8fafc;padding:10px 12px;border-radius:10px;border:1px solid #e2e8f0;";
+  autoSyncRow.innerHTML = `
+    <div>
+      <div style="font-weight:600;font-size:13px;color:#0f172a;">快照变更时自动同步</div>
+      <div style="font-size:11px;color:#64748b;">快照增删改时自动防抖推送到云端</div>
+    </div>
+    <input type="checkbox" id="lsm-cfg-auto-sync" ${autoSync ? "checked" : ""} style="width:18px;height:18px;cursor:pointer;">
+  `;
+
+  // 上次同步状态
+  const statusInfo = document.createElement("div");
+  const timeStr = lastSync ? formatTime(lastSync) : "从未同步";
+  statusInfo.style.cssText = "font-size:11.5px;color:#64748b;padding:4px 0;";
+  statusInfo.innerHTML = `上次同步时间：<strong style="color:#0f172a;">${timeStr}</strong>`;
+
+  form.append(enableRow, tokenBox, gistIdBox, autoSyncRow, statusInfo);
+
+  // 绑定自动查找 Gist 按钮
+  const autoFindBtn = gistIdBox.querySelector("#lsm-btn-auto-find-gist");
+  if (autoFindBtn) {
+    autoFindBtn.addEventListener("click", async () => {
+      const tok = form.querySelector("#lsm-cfg-gist-token").value.trim();
+      if (!tok) {
+        alert("请先填写上方 GitHub Token (PAT)");
+        return;
+      }
+      autoFindBtn.textContent = "🔍 查找中...";
+      autoFindBtn.disabled = true;
+      try {
+        const foundId = await GistSyncManager.findExistingGist(tok);
+        if (foundId) {
+          form.querySelector("#lsm-cfg-gist-id").value = foundId;
+          showToastGlobal(`已自动找到并回填云备份 Gist: ${foundId.slice(0, 8)}...`, "success");
+        } else {
+          showToastGlobal("未在您的 GitHub 账号中找到历史快照备份", "info");
+        }
+      } catch (e) {
+        showToastGlobal("查找异常: " + e.message, "error");
+      } finally {
+        autoFindBtn.textContent = "🔍 自动查找账号中的备份";
+        autoFindBtn.disabled = false;
+      }
+    });
+  }
+
+  // 按钮行
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:8px;justify-content:flex-end;";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "取消";
+  cancelBtn.style.cssText =
+    "padding:8px 14px;border:1px solid #e2e8f0;background:#ffffff;border-radius:8px;color:#64748b;font-size:12.5px;cursor:pointer;";
+
+  const saveBtn = document.createElement("button");
+  saveBtn.textContent = "仅保存配置";
+  saveBtn.style.cssText =
+    "padding:8px 14px;border:1px solid #cbd5e1;background:#f8fafc;border-radius:8px;color:#334155;font-size:12.5px;cursor:pointer;font-weight:500;";
+
+  const syncNowBtn = document.createElement("button");
+  syncNowBtn.textContent = "保存并立即同步";
+  syncNowBtn.style.cssText =
+    "padding:8px 14px;border:none;background:linear-gradient(135deg,#3b82f6,#2563eb);border-radius:8px;color:#ffffff;font-size:12.5px;cursor:pointer;font-weight:600;box-shadow:0 2px 6px rgba(37,99,235,0.25);";
+
+  const close = () => mask.remove();
+
+  const saveFormValues = () => {
+    const en = form.querySelector("#lsm-cfg-enable-gist").checked;
+    const tok = form.querySelector("#lsm-cfg-gist-token").value.trim();
+    const gid = form.querySelector("#lsm-cfg-gist-id").value.trim();
+    const auto = form.querySelector("#lsm-cfg-auto-sync").checked;
+    GM_setValue("Config.enable_gist_sync", en);
+    GM_setValue("Config.gist_token", tok);
+    GM_setValue("Config.gist_id", gid);
+    GM_setValue("Config.auto_sync_on_change", auto);
+    if (GistSyncManager && typeof GistSyncManager.updateUIStatus === "function") {
+      GistSyncManager.updateUIStatus(en && tok ? (gid ? "success" : "ready") : "unconfigured");
+    }
+  };
+
+  saveBtn.addEventListener("click", () => {
+    saveFormValues();
+    close();
+    showToastGlobal("Gist 配置已保存", "success");
+  });
+
+  syncNowBtn.addEventListener("click", async () => {
+    saveFormValues();
+    const tok = form.querySelector("#lsm-cfg-gist-token").value.trim();
+    if (!tok) {
+      alert("请填写 GitHub Personal Access Token (PAT)");
+      return;
+    }
+    syncNowBtn.textContent = "正在同步中...";
+    syncNowBtn.disabled = true;
+    try {
+      await GistSyncManager.sync({ silent: false });
+      close();
+    } catch (e) {
+      alert("同步失败: " + e.message);
+      syncNowBtn.textContent = "保存并立即同步";
+      syncNowBtn.disabled = false;
+    }
+  });
+
+  cancelBtn.addEventListener("click", close);
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask) close();
+  });
+
+  btnRow.append(cancelBtn, saveBtn, syncNowBtn);
+  box.append(title, desc, form, btnRow);
+  mask.appendChild(box);
+  document.documentElement.appendChild(mask);
+}
+
 // =========================================================================
 // 主应用逻辑初始化
 // =========================================================================
@@ -1309,6 +1972,9 @@ async function initApp() {
       records.unshift(newRecord);
       this.saveRecords(records, domain);
       CryptoEngine.wipeMemory(rawSessionData);
+      if (typeof GistSyncManager !== "undefined") {
+        GistSyncManager.triggerAutoSync();
+      }
       return newRecord;
     },
 
@@ -1320,6 +1986,9 @@ async function initApp() {
         target.name = newName.trim();
         target.updatedAt = Date.now();
         this.saveRecords(records, d);
+        if (typeof GistSyncManager !== "undefined") {
+          GistSyncManager.triggerAutoSync();
+        }
         return true;
       }
       return false;
@@ -1332,6 +2001,9 @@ async function initApp() {
       records = records.filter((r) => r.id !== id);
       if (records.length !== initialLen) {
         this.saveRecords(records, d);
+        if (typeof GistSyncManager !== "undefined") {
+          GistSyncManager.triggerAutoSync();
+        }
         return true;
       }
       return false;
@@ -1369,6 +2041,9 @@ async function initApp() {
       }
       if (count > 0) {
         this.saveRecords(existing, d);
+        if (typeof GistSyncManager !== "undefined") {
+          GistSyncManager.triggerAutoSync();
+        }
       }
       return { count, skipped };
     },
@@ -1389,7 +2064,6 @@ async function initApp() {
   function formatTime(timestamp) {
     if (!timestamp) return "-";
     const d = new Date(timestamp);
-    if (isNaN(d.getTime())) return "-";
     const pad = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
@@ -1718,36 +2392,45 @@ async function initApp() {
       -webkit-backdrop-filter: blur(8px);
       color: #f8fafc;
       font-size: 11px;
-      padding: 2px 10px;
+      padding: 2px 8px;
       border-radius: 9999px;
       font-weight: 500;
-      max-width: 180px;
+      max-width: 140px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      flex-shrink: 1;
     }
     .${uid}-header-actions {
       display: flex;
       align-items: center;
       gap: 6px;
+      flex-shrink: 0;
     }
     .${uid}-header-actions button {
       border: none;
       background: rgba(255, 255, 255, 0.12);
       color: #f8fafc;
       border-radius: 8px;
-      width: 26px;
       height: 26px;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
       font-size: 13px;
+      box-sizing: border-box;
       transition: all 0.15s ease;
+    }
+    #${uid}-btn-close {
+      width: 26px !important;
+      height: 26px !important;
+      padding: 0 !important;
+      font-size: 16px !important;
+      line-height: 1 !important;
     }
     .${uid}-header-actions button:hover {
       background: rgba(255, 255, 255, 0.25);
-      transform: scale(1.05);
+      transform: scale(1.03);
     }
 
     /* 状态条 */
@@ -1768,6 +2451,42 @@ async function initApp() {
       gap: 6px;
       font-weight: 500;
     }
+    .${uid}-status-gist-btn {
+      cursor: pointer;
+      padding: 3px 8px;
+      margin: -3px 0;
+      border-radius: 6px;
+      background: rgba(241, 245, 249, 0.65);
+      border: 1px solid #e2e8f0;
+      transition: all 0.15s ease;
+      user-select: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .${uid}-status-gist-btn:hover {
+      background: #f1f5f9;
+      border-color: #cbd5e1;
+      color: #0f172a;
+    }
+    .${uid}-status-gist-btn:hover .${uid}-gist-sync-icon {
+      color: #2563eb;
+    }
+    .${uid}-gist-sync-icon {
+      color: #64748b;
+      display: inline-block;
+      vertical-align: middle;
+      flex-shrink: 0;
+      transition: transform 0.2s ease, color 0.15s ease;
+    }
+    .${uid}-gist-sync-icon.spinning {
+      animation: ${uid}-spin 0.8s linear infinite;
+      color: #2563eb;
+    }
+    @keyframes ${uid}-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
     .${uid}-dot {
       width: 7px;
       height: 7px;
@@ -1781,6 +2500,45 @@ async function initApp() {
     .${uid}-dot-amber {
       background: #f59e0b;
       box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+    }
+    .${uid}-dot-blue {
+      background: #3b82f6;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+      animation: ${uid}-pulse 1.5s infinite ease-in-out;
+    }
+    .${uid}-dot-red {
+      background: #ef4444;
+      box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25);
+    }
+    @keyframes ${uid}-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(1.25); }
+    }
+    .${uid}-btn-cloud {
+      border: 1px solid rgba(255, 255, 255, 0.25) !important;
+      background: rgba(255, 255, 255, 0.15) !important;
+      color: #ffffff !important;
+      border-radius: 8px !important;
+      height: 26px !important;
+      width: auto !important;
+      min-width: unset !important;
+      padding: 0 8px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 4px !important;
+      cursor: pointer !important;
+      font-size: 11px !important;
+      font-weight: 600 !important;
+      white-space: nowrap !important;
+      flex-shrink: 0 !important;
+      box-sizing: border-box !important;
+      line-height: 1 !important;
+      transition: all 0.15s ease !important;
+    }
+    .${uid}-btn-cloud:hover {
+      background: rgba(255, 255, 255, 0.28) !important;
+      transform: scale(1.02) !important;
     }
 
     /* 操作工具栏 */
@@ -2338,73 +3096,6 @@ async function initApp() {
       display: block;
       border-radius: 6px;
     }
-    .${uid}-qr-overflow-box {
-      background: #fffbeb;
-      border: 1px solid #fde68a;
-      border-radius: 12px;
-      padding: 16px 12px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      text-align: center;
-      max-width: 100%;
-      box-shadow: 0 2px 8px rgba(245, 158, 11, 0.08);
-    }
-    .${uid}-qr-chunk-player {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      gap: 10px;
-      width: 100%;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 12px;
-      padding: 12px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-    }
-    .${uid}-qr-chunk-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      width: 100%;
-      font-size: 12px;
-      color: #334155;
-      font-weight: 600;
-    }
-    .${uid}-qr-chunk-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      background: #eff6ff;
-      color: #2563eb;
-      border: 1px solid #bfdbfe;
-      padding: 3px 8px;
-      border-radius: 9999px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-    .${uid}-qr-chunk-bar-wrap {
-      width: 100%;
-      height: 6px;
-      background: #e2e8f0;
-      border-radius: 9999px;
-      overflow: hidden;
-    }
-    .${uid}-qr-chunk-bar-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #3b82f6, #06b6d4);
-      border-radius: 9999px;
-      transition: width 0.15s ease;
-    }
-    .${uid}-qr-chunk-controls {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      width: 100%;
-    }
 
     /* 扫码与综合导入抽屉弹窗 */
     .${uid}-scan-dialog {
@@ -2493,60 +3184,6 @@ async function initApp() {
       font-size: 12px;
       background: rgba(15, 23, 42, 0.92);
       z-index: 2;
-    }
-    .${uid}-scan-chunk-hud {
-      position: absolute;
-      top: 8px;
-      left: 8px;
-      right: 8px;
-      background: rgba(15, 23, 42, 0.92);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(56, 189, 248, 0.5);
-      border-radius: 10px;
-      padding: 8px 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      z-index: 6;
-      color: #ffffff;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    }
-    .${uid}-scan-chunk-title {
-      font-size: 11px;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      color: #f1f5f9;
-    }
-    .${uid}-scan-chunk-chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 3px;
-      max-height: 48px;
-      overflow-y: auto;
-      padding: 2px 0;
-    }
-    .${uid}-scan-chunk-dot {
-      width: 16px;
-      height: 16px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 9px;
-      font-weight: 700;
-      border-radius: 3px;
-      background: rgba(255, 255, 255, 0.12);
-      color: #94a3b8;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      transition: all 0.15s ease;
-    }
-    .${uid}-scan-chunk-dot.received {
-      background: #10b981;
-      color: #ffffff;
-      border-color: #34d399;
-      box-shadow: 0 0 5px rgba(16, 185, 129, 0.7);
-      transform: scale(1.05);
     }
     .${uid}-scan-frame {
       position: absolute;
@@ -2723,6 +3360,9 @@ async function initApp() {
           <span class="${uid}-domain-tag" title="${location.hostname}">${location.hostname}</span>
         </div>
         <div class="${uid}-header-actions">
+          <button class="${uid}-btn-cloud" id="${uid}-btn-cloud-sync" title="打开 GitHub Gist 云同步设置">
+            ⚙️ <span id="${uid}-sync-status-text">Gist设置</span>
+          </button>
           <button id="${uid}-btn-close" title="隐藏">×</button>
         </div>
       </div>
@@ -2731,7 +3371,14 @@ async function initApp() {
       <div class="${uid}-status-bar">
         <div class="${uid}-status-item">
           <span class="${uid}-dot ${SessionManager.hasGmCookie() ? `${uid}-dot-green` : `${uid}-dot-amber`}"></span>
-          <span>Cookie: ${SessionManager.hasGmCookie() ? "全量 (GM_cookie)" : "基础 (document.cookie)"}</span>
+          <span>Cookie: ${SessionManager.hasGmCookie() ? "全量" : "基础"}</span>
+        </div>
+        <div class="${uid}-status-item ${uid}-status-gist-btn" id="${uid}-status-gist" title="点击立即手动同步 (与 GitHub Gist 双向合并)">
+          <span class="${uid}-dot" id="${uid}-dot-gist"></span>
+          <span id="${uid}-text-gist">Gist: 检查中...</span>
+          <svg class="${uid}-gist-sync-icon" id="${uid}-gist-sync-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+          </svg>
         </div>
         <div class="${uid}-status-item">
           <span class="${uid}-dot ${isEncryptionEnabled() ? `${uid}-dot-green` : `${uid}-dot-amber`}"></span>
@@ -2785,6 +3432,20 @@ async function initApp() {
                   <path d="M4 7V4h3M20 7V4h-3M4 17v3h3M20 17v3h-3M9 9h6v6H9z"></path>
                 </svg>
                 <span>扫码与快照导入</span>
+              </div>
+              <div class="${uid}-dropdown-divider"></div>
+              <div class="${uid}-dropdown-item" id="${uid}-btn-sync-now" style="color: #2563eb; font-weight: 600;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                </svg>
+                <span>立即同步至 Gist 云端</span>
+              </div>
+              <div class="${uid}-dropdown-item" id="${uid}-btn-sync-settings">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="3"></circle>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+                <span>Gist 云同步设置</span>
               </div>
               <div class="${uid}-dropdown-divider"></div>
               <div class="${uid}-dropdown-item" id="${uid}-btn-export-all">
@@ -2888,48 +3549,8 @@ async function initApp() {
             <strong id="${uid}-qr-rec-name" style="font-size: 14px; color: #0f172a;">快照名称</strong>
             <div id="${uid}-qr-rec-meta" style="font-size: 11px; color: #64748b; margin-top: 2px;"></div>
           </div>
-          <div class="${uid}-qr-canvas-wrap" id="${uid}-qr-canvas-wrap">
+          <div class="${uid}-qr-canvas-wrap">
             <canvas id="${uid}-qr-canvas"></canvas>
-          </div>
-          <div class="${uid}-qr-overflow-box" id="${uid}-qr-overflow-box" style="display: none;">
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2">
-              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-              <line x1="12" y1="9" x2="12" y2="13"></line>
-              <line x1="12" y1="17" x2="12.01" y2="17"></line>
-            </svg>
-            <div style="font-weight: 700; color: #b45309; font-size: 13px;">快照数据过大，单张二维码无法容纳</div>
-            <div id="${uid}-qr-overflow-desc" style="font-size: 11px; color: #78350f; text-align: center; line-height: 1.4;">
-              当前快照数据超出二维码标准容量上限（约 2KB）。
-            </div>
-            <button class="${uid}-btn ${uid}-btn-primary" id="${uid}-btn-start-chunk-qr" style="width: 100%; margin-top: 4px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-              </svg>
-              <span>分片轮播生成 (500ms/帧)</span>
-            </button>
-            <div style="font-size: 11px; color: #92400e; background: #fef3c7; padding: 6px 10px; border-radius: 6px; border: 1px dashed #fcd34d; width: 100%;">
-              💡 或使用下方「复制数据」/「导出文件」直接流转
-            </div>
-          </div>
-          <div class="${uid}-qr-chunk-player" id="${uid}-qr-chunk-player" style="display: none;">
-            <div class="${uid}-qr-chunk-header">
-              <span class="${uid}-qr-chunk-badge" id="${uid}-qr-chunk-badge">
-                <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#2563eb;"></span>
-                <span id="${uid}-qr-chunk-idx-text">分片 1 / 1</span>
-              </span>
-              <span style="font-size: 11px; color: #64748b;">500ms / 帧 · 循环播放</span>
-            </div>
-            <div class="${uid}-qr-chunk-bar-wrap">
-              <div class="${uid}-qr-chunk-bar-fill" id="${uid}-qr-chunk-bar-fill" style="width: 0%;"></div>
-            </div>
-            <div class="${uid}-qr-chunk-controls">
-              <button class="${uid}-btn ${uid}-btn-secondary ${uid}-btn-sm" id="${uid}-btn-chunk-prev" title="上一张分片">◀</button>
-              <button class="${uid}-btn ${uid}-btn-primary ${uid}-btn-sm" id="${uid}-btn-chunk-play-toggle" title="暂停/继续播放">
-                <span id="${uid}-chunk-play-icon">⏸ 暂停</span>
-              </button>
-              <button class="${uid}-btn ${uid}-btn-secondary ${uid}-btn-sm" id="${uid}-btn-chunk-next" title="下一张分片">▶</button>
-              <button class="${uid}-btn ${uid}-btn-secondary ${uid}-btn-sm" id="${uid}-btn-chunk-exit" style="margin-left: auto; color: #ef4444;" title="退出分片轮播模式">✕ 退出分片</button>
-            </div>
           </div>
           <div id="${uid}-qr-tip" style="font-size: 11px; color: #64748b; text-align: center;">
             使用另一台设备或快照助手的「扫码」功能即可一键导入与恢复
@@ -2974,21 +3595,6 @@ async function initApp() {
           <!-- 摄像头视口 -->
           <div class="${uid}-camera-viewport" id="${uid}-camera-viewport">
             <video class="${uid}-camera-video" id="${uid}-camera-video" playsinline muted autoplay></video>
-            <!-- 分片接收 HUD 浮层 -->
-            <div class="${uid}-scan-chunk-hud" id="${uid}-scan-chunk-hud" style="display: none;">
-              <div class="${uid}-scan-chunk-title">
-                <span style="display:inline-flex; align-items:center; gap:4px;">
-                  <span style="width:7px; height:7px; border-radius:50%; background:#10b981; display:inline-block;"></span>
-                  <span>分片实时接收中</span>
-                </span>
-                <strong id="${uid}-scan-chunk-progress-text" style="color: #38bdf8;">0 / 0 (0%)</strong>
-              </div>
-              <div class="${uid}-qr-chunk-bar-wrap" style="background: rgba(255,255,255,0.2);">
-                <div class="${uid}-qr-chunk-bar-fill" id="${uid}-scan-chunk-bar-fill" style="width: 0%; background: #10b981;"></div>
-              </div>
-              <div class="${uid}-scan-chunk-chips" id="${uid}-scan-chunk-chips"></div>
-              <div style="font-size: 10px; color: #cbd5e1; text-align: center;">请对准屏幕轮播二维码（支持乱序扫描，全部分片集齐自动完成）</div>
-            </div>
             <div class="${uid}-scan-frame" id="${uid}-scan-frame" style="display: none;">
               <span class="${uid}-scan-corner ${uid}-scan-corner-tl"></span>
               <span class="${uid}-scan-corner ${uid}-scan-corner-tr"></span>
@@ -3104,21 +3710,7 @@ async function initApp() {
   const qrDialog = shadow.getElementById(`${uid}-qr-dialog`);
   const qrRecName = shadow.getElementById(`${uid}-qr-rec-name`);
   const qrRecMeta = shadow.getElementById(`${uid}-qr-rec-meta`);
-  const qrCanvasWrap = shadow.getElementById(`${uid}-qr-canvas-wrap`);
   const qrCanvas = shadow.getElementById(`${uid}-qr-canvas`);
-  const qrOverflowBox = shadow.getElementById(`${uid}-qr-overflow-box`);
-  const qrOverflowDesc = shadow.getElementById(`${uid}-qr-overflow-desc`);
-  const btnStartChunkQr = shadow.getElementById(`${uid}-btn-start-chunk-qr`);
-  const qrChunkPlayer = shadow.getElementById(`${uid}-qr-chunk-player`);
-  const qrChunkBadge = shadow.getElementById(`${uid}-qr-chunk-badge`);
-  const qrChunkIdxText = shadow.getElementById(`${uid}-qr-chunk-idx-text`);
-  const qrChunkBarFill = shadow.getElementById(`${uid}-qr-chunk-bar-fill`);
-  const btnChunkPrev = shadow.getElementById(`${uid}-btn-chunk-prev`);
-  const btnChunkPlayToggle = shadow.getElementById(`${uid}-btn-chunk-play-toggle`);
-  const chunkPlayIcon = shadow.getElementById(`${uid}-chunk-play-icon`);
-  const btnChunkNext = shadow.getElementById(`${uid}-btn-chunk-next`);
-  const btnChunkExit = shadow.getElementById(`${uid}-btn-chunk-exit`);
-  const qrTip = shadow.getElementById(`${uid}-qr-tip`);
   const btnDownloadQr = shadow.getElementById(`${uid}-btn-download-qr`);
   const btnCopyQrData = shadow.getElementById(`${uid}-btn-copy-qr-data`);
   const btnCloseQr = shadow.getElementById(`${uid}-btn-close-qr`);
@@ -3129,10 +3721,6 @@ async function initApp() {
   const scanViewMain = shadow.getElementById(`${uid}-scan-view-main`);
   const scanViewResult = shadow.getElementById(`${uid}-scan-view-result`);
   const cameraVideo = shadow.getElementById(`${uid}-camera-video`);
-  const scanChunkHud = shadow.getElementById(`${uid}-scan-chunk-hud`);
-  const scanChunkProgressText = shadow.getElementById(`${uid}-scan-chunk-progress-text`);
-  const scanChunkBarFill = shadow.getElementById(`${uid}-scan-chunk-bar-fill`);
-  const scanChunkChips = shadow.getElementById(`${uid}-scan-chunk-chips`);
   const scanFrame = shadow.getElementById(`${uid}-scan-frame`);
   const cameraPlaceholder = shadow.getElementById(`${uid}-camera-placeholder`);
   const cameraStatusText = shadow.getElementById(`${uid}-camera-status-text`);
@@ -3365,7 +3953,7 @@ async function initApp() {
     if (filterText) {
       records = allRecords.filter((r) => {
         const nameMatch = (r.name || "").toLowerCase().includes(filterText);
-        const timeMatch = formatTime(r.createdAt || r.createTime || r.updatedAt).includes(filterText);
+        const timeMatch = formatTime(r.createdAt).includes(filterText);
         const urlMatch = (r.url || "").toLowerCase().includes(filterText);
         return nameMatch || timeMatch || urlMatch;
       });
@@ -3416,7 +4004,7 @@ async function initApp() {
               ${escapeHtml(r.name)}
               ${isActive ? `<span class="${uid}-badge-active">✓ 当前生效</span>` : ""}
             </span>
-            <span class="${uid}-card-time">${formatTime(r.createdAt || r.createTime || r.updatedAt)}</span>
+            <span class="${uid}-card-time">${formatTime(r.createdAt)}</span>
           </div>
           <div class="${uid}-card-chips">
             <span class="${uid}-chip ${uid}-chip-cookie">🍪 Cookie: ${cookieCount}</span>
@@ -3659,14 +4247,10 @@ async function initApp() {
   }
 
   // -----------------------------------------------------------------------
-  // 快照二维码展示抽屉逻辑 & 分片轮播播放器
+  // 快照二维码展示抽屉逻辑
   // -----------------------------------------------------------------------
   let currentQrRecord = null;
   let currentQrJson = "";
-  let activeChunks = [];
-  let currentChunkIndex = 0;
-  let chunkCarouselTimer = null;
-  let isChunkPlaying = true;
 
   /**
    * 使用 qrcode-generator 渲染二维码至指定的 Canvas 元素
@@ -3727,138 +4311,16 @@ async function initApp() {
     return null;
   }
 
-  /**
-   * 将较长数据切割成 LSM_CHUNK 分片包
-   */
-  function generateQrChunks(record, jsonStr) {
-    const CHUNK_SIZE = 1200; // 每个分片约 1.2 KB，保证 QR Code Version <= 20，识别速度和容错率最高
-    const totalChunks = Math.max(1, Math.ceil(jsonStr.length / CHUNK_SIZE));
-    const chunkId = "chk_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
-    const chunks = [];
-    for (let i = 0; i < totalChunks; i++) {
-      const slice = jsonStr.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-      const payload = {
-        type: "LSM_CHUNK",
-        id: chunkId,
-        idx: i,
-        total: totalChunks,
-        data: slice,
-        name: record ? record.name : "快照"
-      };
-      chunks.push(JSON.stringify(payload));
-    }
-    return chunks;
-  }
-
-  function renderCurrentChunk() {
-    if (!activeChunks || activeChunks.length === 0) return;
-    const text = activeChunks[currentChunkIndex];
-    try {
-      renderQrCodeToCanvas(qrCanvas, text, {
-        size: 220,
-        margin: 2,
-        errorCorrectionLevel: "M",
-        colorDark: "#0f172a",
-        colorLight: "#ffffff"
-      });
-    } catch (err) {
-      console.warn("渲染分片二维码失败:", err);
-    }
-    if (qrChunkIdxText) {
-      qrChunkIdxText.textContent = `分片 ${currentChunkIndex + 1} / ${activeChunks.length}`;
-    }
-    if (qrChunkBarFill) {
-      const pct = Math.round(((currentChunkIndex + 1) / activeChunks.length) * 100);
-      qrChunkBarFill.style.width = `${pct}%`;
-    }
-  }
-
-  function startChunkTimer() {
-    if (chunkCarouselTimer) clearInterval(chunkCarouselTimer);
-    chunkCarouselTimer = setInterval(() => {
-      if (!activeChunks || activeChunks.length <= 1) return;
-      currentChunkIndex = (currentChunkIndex + 1) % activeChunks.length;
-      renderCurrentChunk();
-    }, 500);
-  }
-
-  function startChunkCarousel() {
-    if (!currentQrRecord || !currentQrJson) return;
-    activeChunks = generateQrChunks(currentQrRecord, currentQrJson);
-    currentChunkIndex = 0;
-    isChunkPlaying = true;
-
-    if (qrOverflowBox) qrOverflowBox.style.display = "none";
-    if (qrCanvasWrap) qrCanvasWrap.style.display = "flex";
-    if (qrChunkPlayer) qrChunkPlayer.style.display = "flex";
-    if (qrTip) {
-      qrTip.style.display = "block";
-      qrTip.textContent = `共生成 ${activeChunks.length} 张分片二维码，正在以 500ms/帧 循环轮播`;
-    }
-    if (chunkPlayIcon) chunkPlayIcon.textContent = "⏸ 暂停";
-
-    renderCurrentChunk();
-    startChunkTimer();
-  }
-
-  function stopChunkCarousel() {
-    if (chunkCarouselTimer) {
-      clearInterval(chunkCarouselTimer);
-      chunkCarouselTimer = null;
-    }
-    activeChunks = [];
-    currentChunkIndex = 0;
-    isChunkPlaying = false;
-    if (qrChunkPlayer) qrChunkPlayer.style.display = "none";
-  }
-
-  function toggleChunkPlay() {
-    if (isChunkPlaying) {
-      isChunkPlaying = false;
-      if (chunkCarouselTimer) {
-        clearInterval(chunkCarouselTimer);
-        chunkCarouselTimer = null;
-      }
-      if (chunkPlayIcon) chunkPlayIcon.textContent = "▶ 继续";
-    } else {
-      isChunkPlaying = true;
-      if (chunkPlayIcon) chunkPlayIcon.textContent = "⏸ 暂停";
-      startChunkTimer();
-    }
-  }
-
-  function prevChunk() {
-    if (!activeChunks || activeChunks.length === 0) return;
-    currentChunkIndex = (currentChunkIndex - 1 + activeChunks.length) % activeChunks.length;
-    renderCurrentChunk();
-  }
-
-  function nextChunk() {
-    if (!activeChunks || activeChunks.length === 0) return;
-    currentChunkIndex = (currentChunkIndex + 1) % activeChunks.length;
-    renderCurrentChunk();
-  }
-
-  function exitChunkMode() {
-    stopChunkCarousel();
-    if (qrCanvasWrap) qrCanvasWrap.style.display = "none";
-    if (qrOverflowBox) qrOverflowBox.style.display = "flex";
-    if (qrTip) qrTip.style.display = "none";
-  }
-
   function openQrCodeDialog(record) {
     if (!record) return;
-    stopChunkCarousel();
     currentQrRecord = record;
     qrRecName.textContent = record.name || "未命名快照";
 
-    const timeVal = record.createdAt || record.createTime || record.updatedAt || Date.now();
-    const dateStr = formatTime(timeVal);
+    const dateStr = new Date(record.createTime).toLocaleString();
     const cookieCount = record.summary ? record.summary.cookieCount : 0;
     const localCount = record.summary ? record.summary.localCount : 0;
     const sessionCount = record.summary ? record.summary.sessionCount : 0;
-    const approxBytes = record.summary && record.summary.approxBytes ? record.summary.approxBytes : 0;
-    const sizeKb = approxBytes ? (approxBytes / 1024).toFixed(1) : "-";
+    const sizeKb = record.summary && record.summary.approxBytes ? (record.summary.approxBytes / 1024).toFixed(1) : "-";
 
     qrRecMeta.innerHTML = `
       <span>创建时间: <strong>${dateStr}</strong></span> · 
@@ -3874,141 +4336,36 @@ async function initApp() {
       record: record
     };
     currentQrJson = JSON.stringify(exportData);
-    const byteLength = new Blob([currentQrJson]).size;
-    const actualKb = (byteLength / 1024).toFixed(1);
 
-    // 标准 QR Code Level M 最大容量约 2,331 字节 (~2.2 KB)
-    // 如果超过 2,200 字节，直接判定为超限，显示超限提示及分片轮播生成按钮
-    const QR_MAX_SAFE_BYTES = 2200;
-
-    if (byteLength > QR_MAX_SAFE_BYTES) {
-      if (qrCanvasWrap) qrCanvasWrap.style.display = "none";
-      if (qrOverflowBox) qrOverflowBox.style.display = "flex";
-      if (qrOverflowDesc) {
-        qrOverflowDesc.innerHTML = `当前快照数据体积为 <strong>${actualKb} KB</strong> (${byteLength} 字节)，已超出标准单张二维码容纳极限（约 2.2 KB）。`;
-      }
-      if (qrTip) qrTip.style.display = "none";
-      if (btnDownloadQr) {
-        btnDownloadQr.disabled = true;
-        btnDownloadQr.style.opacity = "0.45";
-        btnDownloadQr.style.cursor = "not-allowed";
-        btnDownloadQr.title = "快照数据过大，无法生成单张二维码图片";
-      }
-    } else {
-      let renderSuccess = false;
-      try {
-        renderQrCodeToCanvas(qrCanvas, currentQrJson, {
-          size: 220,
-          margin: 2,
-          errorCorrectionLevel: "M",
-          colorDark: "#0f172a",
-          colorLight: "#ffffff"
-        });
-        renderSuccess = true;
-      } catch (err) {
-        console.warn("二维码生成失败:", err);
-      }
-
-      if (renderSuccess) {
-        if (qrCanvasWrap) qrCanvasWrap.style.display = "flex";
-        if (qrOverflowBox) qrOverflowBox.style.display = "none";
-        if (qrTip) {
-          qrTip.style.display = "block";
-          qrTip.textContent = "使用另一台设备或快照助手的「扫码」功能即可一键导入与恢复";
-        }
-        if (btnDownloadQr) {
-          btnDownloadQr.disabled = false;
-          btnDownloadQr.style.opacity = "1";
-          btnDownloadQr.style.cursor = "pointer";
-          btnDownloadQr.title = "下载二维码 PNG 图片";
-        }
-      } else {
-        if (qrCanvasWrap) qrCanvasWrap.style.display = "none";
-        if (qrOverflowBox) qrOverflowBox.style.display = "flex";
-        if (qrOverflowDesc) {
-          qrOverflowDesc.innerHTML = `当前快照数据体积为 <strong>${actualKb} KB</strong>，超出二维码容量限制。`;
-        }
-        if (qrTip) qrTip.style.display = "none";
-        if (btnDownloadQr) {
-          btnDownloadQr.disabled = true;
-          btnDownloadQr.style.opacity = "0.45";
-          btnDownloadQr.style.cursor = "not-allowed";
-          btnDownloadQr.title = "快照数据过大，无法生成二维码图片";
-        }
-      }
+    // 渲染二维码
+    try {
+      renderQrCodeToCanvas(qrCanvas, currentQrJson, {
+        size: 220,
+        margin: 2,
+        errorCorrectionLevel: "M",
+        colorDark: "#0f172a",
+        colorLight: "#ffffff"
+      });
+    } catch (err) {
+      console.error("二维码生成失败:", err);
+      showToast(`二维码生成失败: ${err.message}`, "error");
     }
 
     qrDialog.classList.add("open");
   }
 
   function closeQrCodeDialog() {
-    stopChunkCarousel();
     qrDialog.classList.remove("open");
     currentQrRecord = null;
     currentQrJson = "";
-    if (btnDownloadQr) {
-      btnDownloadQr.disabled = false;
-      btnDownloadQr.style.opacity = "1";
-      btnDownloadQr.style.cursor = "pointer";
-    }
   }
 
   // -----------------------------------------------------------------------
-  // 扫码与综合导入抽屉逻辑 (摄像头 / 图片二维码 / JSON 文件 / 乱序分片接收)
+  // 扫码与综合导入抽屉逻辑 (摄像头 / 图片二维码 / JSON 文件)
   // -----------------------------------------------------------------------
   let cameraStream = null;
   let cameraAnimId = null;
   let currentScannedSnapshot = null;
-  const chunkScanPool = new Map();
-
-  function updateScanChunkHud(entry) {
-    if (!scanChunkProgressText || !scanChunkBarFill || !scanChunkChips) return;
-    const pct = Math.round((entry.receivedCount / entry.total) * 100);
-    scanChunkProgressText.textContent = `${entry.receivedCount} / ${entry.total} (${pct}%)`;
-    scanChunkBarFill.style.width = `${pct}%`;
-
-    let dotsHtml = "";
-    for (let i = 0; i < entry.total; i++) {
-      const isReceived = entry.chunks[i] !== null;
-      dotsHtml += `<span class="${uid}-scan-chunk-dot ${isReceived ? "received" : ""}" title="分片 ${i + 1}/${entry.total}">${i + 1}</span>`;
-    }
-    scanChunkChips.innerHTML = dotsHtml;
-  }
-
-  function handleIncomingChunk(chunkObj) {
-    const { id, idx, total, data, name } = chunkObj;
-    if (!id || typeof idx !== "number" || !total || typeof data !== "string") return;
-
-    let entry = chunkScanPool.get(id);
-    if (!entry) {
-      entry = {
-        id: id,
-        total: total,
-        name: name || "分片快照",
-        chunks: new Array(total).fill(null),
-        receivedCount: 0,
-        createdAt: Date.now()
-      };
-      chunkScanPool.set(id, entry);
-    }
-
-    if (scanChunkHud) scanChunkHud.style.display = "flex";
-
-    if (entry.chunks[idx] === null) {
-      entry.chunks[idx] = data;
-      entry.receivedCount++;
-      updateScanChunkHud(entry);
-    }
-
-    if (entry.receivedCount === entry.total) {
-      stopCameraScan();
-      if (scanChunkHud) scanChunkHud.style.display = "none";
-      const fullJsonStr = entry.chunks.join("");
-      chunkScanPool.delete(id);
-      showToast(`所有分片 (${total}/${total}) 已完整接收，正在解析快照...`, "success");
-      handleQrDecodedString(fullJsonStr);
-    }
-  }
 
   function stopCameraScan() {
     if (cameraAnimId) {
@@ -4074,23 +4431,9 @@ async function initApp() {
           inversionAttempts: "dontInvert"
         });
         if (code && code.data) {
-          let chunkObj = null;
-          try {
-            const parsed = JSON.parse(code.data.trim());
-            if (parsed && parsed.type === "LSM_CHUNK" && parsed.id && typeof parsed.idx === "number" && parsed.total && typeof parsed.data === "string") {
-              chunkObj = parsed;
-            }
-          } catch (e) {}
-
-          if (chunkObj) {
-            handleIncomingChunk(chunkObj);
-            // 分片模式下不停止相机，继续下一帧扫描直到全部集齐
-          } else {
-            // 普通完整二维码，直接停止扫描并解析
-            stopCameraScan();
-            handleQrDecodedString(code.data);
-            return;
-          }
+          stopCameraScan();
+          handleQrDecodedString(code.data);
+          return;
         }
       }
     }
@@ -4099,11 +4442,6 @@ async function initApp() {
 
   function resetScanModal() {
     stopCameraScan();
-    chunkScanPool.clear();
-    if (scanChunkHud) scanChunkHud.style.display = "none";
-    if (scanChunkProgressText) scanChunkProgressText.textContent = "0 / 0 (0%)";
-    if (scanChunkBarFill) scanChunkBarFill.style.width = "0%";
-    if (scanChunkChips) scanChunkChips.innerHTML = "";
     currentScannedSnapshot = null;
     scanViewMain.style.display = "flex";
     scanViewResult.style.display = "none";
@@ -4118,8 +4456,6 @@ async function initApp() {
 
   function closeScanDialog() {
     stopCameraScan();
-    chunkScanPool.clear();
-    if (scanChunkHud) scanChunkHud.style.display = "none";
     scanDialog.classList.remove("open");
     currentScannedSnapshot = null;
   }
@@ -4136,16 +4472,6 @@ async function initApp() {
       showToast("二维码解析成功，但内容不是合法的 JSON 快照数据", "error");
       return;
     }
-
-    if (json && json.type === "LSM_CHUNK" && json.id && typeof json.idx === "number" && json.total && typeof json.data === "string") {
-      handleIncomingChunk(json);
-      const entry = chunkScanPool.get(json.id);
-      if (entry && entry.receivedCount < entry.total) {
-        showToast(`已暂存分片 ${json.idx + 1}/${json.total}，请继续扫描或导入剩余分片`, "info");
-      }
-      return;
-    }
-
     handleParsedSnapshot(json, "扫码导入快照");
   }
 
@@ -4215,7 +4541,6 @@ async function initApp() {
         name: name,
         domain: json.domain || location.hostname,
         url: json.url || location.href,
-        createdAt: Date.now(),
         createTime: Date.now(),
         summary: json.summary || {
           cookieCount: Array.isArray(json.cookies) ? json.cookies.length : 0,
@@ -4253,8 +4578,7 @@ async function initApp() {
       <span class="${uid}-chip" style="background:#f8fafc;color:#475569;border-color:#e2e8f0;">🔒 ${isEnc}</span>
     `;
 
-    const createTimeVal = targetRecord.createdAt || targetRecord.createTime || (json && (json.exportTime || json.createdAt || json.createTime));
-    const createTimeStr = createTimeVal ? formatTime(createTimeVal) : "未知时间";
+    const createTimeStr = targetRecord.createTime ? new Date(targetRecord.createTime).toLocaleString() : "未知时间";
     resMeta.textContent = `来源域名: ${sourceDomain || location.hostname} · 创建于 ${createTimeStr}`;
 
     if (sourceDomain && sourceDomain !== location.hostname) {
@@ -4278,6 +4602,17 @@ async function initApp() {
       win.style.display = "flex";
       win.classList.remove("hidden");
       refreshList();
+      if (typeof updateGistStatus === "function") {
+        updateGistStatus();
+      }
+      if (
+        typeof GistSyncManager !== "undefined" &&
+        GistSyncManager.isEnabled() &&
+        GistSyncManager.getToken() &&
+        Date.now() - (GistSyncManager.lastSyncTime || 0) > 60000
+      ) {
+        GistSyncManager.sync({ silent: true }).catch(() => {});
+      }
     }
   }
 
@@ -4393,6 +4728,80 @@ async function initApp() {
       dropdownMenu.classList.add("hidden");
     }
   });
+
+  // Gist 云同步状态更新
+  function updateGistStatus(status) {
+    const gistDot = shadow.getElementById(`${uid}-dot-gist`);
+    const gistText = shadow.getElementById(`${uid}-text-gist`);
+    const gistIcon = shadow.getElementById(`${uid}-gist-sync-icon`);
+    if (!gistDot || !gistText) return;
+
+    const isEn = GistSyncManager.isEnabled();
+    const token = GistSyncManager.getToken();
+
+    if (!isEn || !token) {
+      gistDot.className = `${uid}-dot ${uid}-dot-amber`;
+      gistText.textContent = "Gist: 未配置 (点击设置)";
+      if (gistIcon) gistIcon.classList.remove("spinning");
+      return;
+    }
+
+    if (status === "syncing") {
+      gistDot.className = `${uid}-dot ${uid}-dot-blue`;
+      gistText.textContent = "Gist: 正在同步...";
+      if (gistIcon) gistIcon.classList.add("spinning");
+    } else if (status === "error") {
+      gistDot.className = `${uid}-dot ${uid}-dot-red`;
+      gistText.textContent = "Gist: 同步失败 (点击重试)";
+      if (gistIcon) gistIcon.classList.remove("spinning");
+    } else {
+      gistDot.className = `${uid}-dot ${uid}-dot-green`;
+      const timeStr = GistSyncManager.lastSyncTime ? formatTime(GistSyncManager.lastSyncTime).slice(11, 19) : "就绪";
+      gistText.textContent = `Gist: 已同步 (${timeStr})`;
+      if (gistIcon) gistIcon.classList.remove("spinning");
+    }
+  }
+
+  // 1. 标题栏右上角按钮：点击直接打开「Gist 云同步设置」弹窗
+  const btnCloudSync = shadow.getElementById(`${uid}-btn-cloud-sync`);
+  if (btnCloudSync) {
+    btnCloudSync.addEventListener("click", () => {
+      showGistSyncDialog();
+    });
+  }
+
+  // 2. 状态条 Gist 项：点击触发「立即手动同步」
+  const statusGist = shadow.getElementById(`${uid}-status-gist`);
+  if (statusGist) {
+    statusGist.addEventListener("click", () => {
+      if (!GistSyncManager.isEnabled() || !GistSyncManager.getToken()) {
+        showGistSyncDialog();
+      } else {
+        GistSyncManager.sync({ silent: false });
+      }
+    });
+  }
+
+  // 下拉菜单中的 Gist 操作
+  const btnSyncNow = shadow.getElementById(`${uid}-btn-sync-now`);
+  if (btnSyncNow) {
+    btnSyncNow.addEventListener("click", () => {
+      dropdownMenu.classList.add("hidden");
+      if (!GistSyncManager.isEnabled() || !GistSyncManager.getToken()) {
+        showGistSyncDialog();
+      } else {
+        GistSyncManager.sync({ silent: false });
+      }
+    });
+  }
+
+  const btnSyncSettings = shadow.getElementById(`${uid}-btn-sync-settings`);
+  if (btnSyncSettings) {
+    btnSyncSettings.addEventListener("click", () => {
+      dropdownMenu.classList.add("hidden");
+      showGistSyncDialog();
+    });
+  }
 
   // 批量导出
   shadow.getElementById(`${uid}-btn-export-all`).addEventListener("click", () => {
@@ -4736,19 +5145,8 @@ async function initApp() {
   if (btnCloseQr) btnCloseQr.addEventListener("click", () => closeQrCodeDialog());
   if (btnCloseQrBottom) btnCloseQrBottom.addEventListener("click", () => closeQrCodeDialog());
 
-  // 分片轮播播放器事件绑定
-  if (btnStartChunkQr) btnStartChunkQr.addEventListener("click", () => startChunkCarousel());
-  if (btnChunkPlayToggle) btnChunkPlayToggle.addEventListener("click", () => toggleChunkPlay());
-  if (btnChunkPrev) btnChunkPrev.addEventListener("click", () => prevChunk());
-  if (btnChunkNext) btnChunkNext.addEventListener("click", () => nextChunk());
-  if (btnChunkExit) btnChunkExit.addEventListener("click", () => exitChunkMode());
-
   if (btnDownloadQr) {
     btnDownloadQr.addEventListener("click", () => {
-      if (btnDownloadQr.disabled) {
-        showToast("快照数据过大无法生成二维码图片，请使用「复制数据」或「导出文件」", "error");
-        return;
-      }
       if (!qrCanvas) return;
       try {
         const url = qrCanvas.toDataURL("image/png");
@@ -4965,6 +5363,9 @@ async function initApp() {
     ball,
     win,
     openWindow,
-    closeWindow
+    closeWindow,
+    refreshList,
+    showToast,
+    updateGistStatus
   };
 }
