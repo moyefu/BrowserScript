@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网站快照存储与恢复助手
 // @namespace    https://github.com/moyefu/BrowserScript/WebSnapshotManager
-// @version      1.2.1
+// @version      1.2.2
 // @description  针对指定网站实现快照（Cookie、LocalStorage、SessionStorage）的一键存储、命名、加密备份、二维码生成/扫码与一键恢复
 // @author       MOYEFU
 // @icon         https://pic1.imgdb.cn/i/034D4F8VwYLLoU73kkQs3l.gif
@@ -4737,12 +4737,109 @@ async function initApp() {
   }
 
   // -----------------------------------------------------------------------
-  // 扫码与综合导入抽屉逻辑 (摄像头 / 图片二维码 / JSON 文件 / 乱序分片接收)
+  // 扫码与综合导入抽屉逻辑 (摄像头 / 图片二维码 / JSON 文件 / 乱序分片接收 / 多线程识别)
   // -----------------------------------------------------------------------
   let cameraStream = null;
   let cameraAnimId = null;
   let currentScannedSnapshot = null;
   const chunkScanPool = new Map();
+
+  // 多线程扫码识别引擎
+  let nativeBarcodeDetector = null;
+  let isDetectorBusy = false;
+  let qrWorker = null;
+  let isWorkerBusy = false;
+  let lastDecodedCode = null;
+  let lastDecodedTime = 0;
+
+  function getNativeBarcodeDetector() {
+    if (nativeBarcodeDetector !== null) return nativeBarcodeDetector;
+    if (typeof window !== "undefined" && "BarcodeDetector" in window) {
+      try {
+        nativeBarcodeDetector = new window.BarcodeDetector({ formats: ["qr_code"] });
+      } catch (e) {
+        nativeBarcodeDetector = false;
+      }
+    } else {
+      nativeBarcodeDetector = false;
+    }
+    return nativeBarcodeDetector;
+  }
+
+  function getQrWorker() {
+    if (qrWorker) return qrWorker;
+    try {
+      const workerScript = `
+        let hasJsQR = false;
+        try {
+          importScripts('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js');
+          hasJsQR = typeof jsQR === 'function';
+        } catch (e) {}
+
+        self.onmessage = function(e) {
+          const { buffer, width, height } = e.data;
+          if (!hasJsQR && typeof jsQR === 'function') hasJsQR = true;
+          if (!hasJsQR) {
+            self.postMessage({ result: null, error: 'no_jsqr' });
+            return;
+          }
+          try {
+            const clamped = new Uint8ClampedArray(buffer);
+            const code = jsQR(clamped, width, height, { inversionAttempts: 'dontInvert' });
+            self.postMessage({ result: code ? code.data : null });
+          } catch (err) {
+            self.postMessage({ result: null, error: err.message });
+          }
+        };
+      `;
+      const blob = new Blob([workerScript], { type: "application/javascript" });
+      const workerUrl = URL.createObjectURL(blob);
+      qrWorker = new Worker(workerUrl);
+      qrWorker.onmessage = (e) => {
+        isWorkerBusy = false;
+        const { result } = e.data;
+        if (result) {
+          processDecodedCode(result);
+        }
+      };
+      qrWorker.onerror = (err) => {
+        console.warn("QR Web Worker 运行异常:", err);
+        isWorkerBusy = false;
+      };
+    } catch (e) {
+      console.warn("创建 QR Web Worker 失败 (可能受 CSP 限制):", e);
+      qrWorker = null;
+    }
+    return qrWorker;
+  }
+
+  function processDecodedCode(rawStr) {
+    if (!rawStr || typeof rawStr !== "string") return;
+    const now = Date.now();
+    // 同一数据 200ms 内防重触发
+    if (rawStr === lastDecodedCode && now - lastDecodedTime < 200) {
+      return;
+    }
+    lastDecodedCode = rawStr;
+    lastDecodedTime = now;
+
+    let chunkObj = null;
+    try {
+      const parsed = JSON.parse(rawStr.trim());
+      if (parsed && parsed.type === "LSM_CHUNK" && parsed.id && typeof parsed.idx === "number" && parsed.total && typeof parsed.data === "string") {
+        chunkObj = parsed;
+      }
+    } catch (e) {}
+
+    if (chunkObj) {
+      handleIncomingChunk(chunkObj);
+      // 分片模式：不停止相机，持续在后台线程扫码直到全部集齐
+    } else {
+      // 普通完整二维码：直接停止扫描并解析
+      stopCameraScan();
+      handleQrDecodedString(rawStr);
+    }
+  }
 
   function updateScanChunkHud(entry) {
     if (!scanChunkProgressText || !scanChunkBarFill || !scanChunkChips) return;
@@ -4807,6 +4904,10 @@ async function initApp() {
     if (cameraVideo) {
       cameraVideo.srcObject = null;
     }
+    isDetectorBusy = false;
+    isWorkerBusy = false;
+    lastDecodedCode = null;
+    lastDecodedTime = 0;
     if (scanFrame) scanFrame.style.display = "none";
     if (cameraPlaceholder) cameraPlaceholder.style.display = "flex";
     if (btnStartCamera) btnStartCamera.style.display = "inline-flex";
@@ -4844,39 +4945,88 @@ async function initApp() {
 
   function scanCameraLoop() {
     if (!cameraStream) return;
-    if (cameraVideo.readyState === cameraVideo.HAVE_ENOUGH_DATA) {
-      const canvas = scanHiddenCanvas || document.createElement("canvas");
-      canvas.width = cameraVideo.videoWidth;
-      canvas.height = cameraVideo.videoHeight;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      ctx.drawImage(cameraVideo, 0, 0, canvas.width, canvas.height);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const decoder = getJsQRDecoder();
-      if (decoder) {
-        const code = decoder(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: "dontInvert"
-        });
-        if (code && code.data) {
-          let chunkObj = null;
-          try {
-            const parsed = JSON.parse(code.data.trim());
-            if (parsed && parsed.type === "LSM_CHUNK" && parsed.id && typeof parsed.idx === "number" && parsed.total && typeof parsed.data === "string") {
-              chunkObj = parsed;
-            }
-          } catch (e) {}
 
-          if (chunkObj) {
-            handleIncomingChunk(chunkObj);
-            // 分片模式下不停止相机，继续下一帧扫描直到全部集齐
-          } else {
-            // 普通完整二维码，直接停止扫描并解析
-            stopCameraScan();
-            handleQrDecodedString(code.data);
-            return;
+    if (cameraVideo.readyState === cameraVideo.HAVE_ENOUGH_DATA) {
+      const detector = getNativeBarcodeDetector();
+      if (detector) {
+        // 优先路径 1：浏览器原生硬件加速 BarcodeDetector (底层多线程异步，零主线程卡顿)
+        if (!isDetectorBusy) {
+          isDetectorBusy = true;
+          detector
+            .detect(cameraVideo)
+            .then((barcodes) => {
+              isDetectorBusy = false;
+              if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+                processDecodedCode(barcodes[0].rawValue);
+              }
+            })
+            .catch(() => {
+              isDetectorBusy = false;
+            });
+        }
+      } else {
+        // 优先路径 2：独立 Web Worker 后台解码线程 (通过 Transferable ArrayBuffer 零拷贝传递)
+        const worker = getQrWorker();
+        if (worker) {
+          if (!isWorkerBusy) {
+            isWorkerBusy = true;
+            const vw = cameraVideo.videoWidth || 640;
+            const vh = cameraVideo.videoHeight || 480;
+            const targetWidth = Math.min(640, vw);
+            const targetHeight = Math.round((vh / vw) * targetWidth);
+
+            const canvas = scanHiddenCanvas || document.createElement("canvas");
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            ctx.drawImage(cameraVideo, 0, 0, targetWidth, targetHeight);
+            const imageData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+
+            worker.postMessage(
+              {
+                buffer: imageData.data.buffer,
+                width: targetWidth,
+                height: targetHeight
+              },
+              [imageData.data.buffer]
+            );
+          }
+        } else {
+          // 降级路径 3：主线程非阻塞异步队列 (缩放图像 + 降频采样)
+          if (!isWorkerBusy) {
+            isWorkerBusy = true;
+            setTimeout(() => {
+              try {
+                if (cameraStream && cameraVideo.readyState === cameraVideo.HAVE_ENOUGH_DATA) {
+                  const vw = cameraVideo.videoWidth || 640;
+                  const vh = cameraVideo.videoHeight || 480;
+                  const targetWidth = Math.min(640, vw);
+                  const targetHeight = Math.round((vh / vw) * targetWidth);
+                  const canvas = scanHiddenCanvas || document.createElement("canvas");
+                  canvas.width = targetWidth;
+                  canvas.height = targetHeight;
+                  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+                  ctx.drawImage(cameraVideo, 0, 0, targetWidth, targetHeight);
+                  const imageData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+                  const decoder = getJsQRDecoder();
+                  if (decoder) {
+                    const code = decoder(imageData.data, imageData.width, imageData.height, {
+                      inversionAttempts: "dontInvert"
+                    });
+                    if (code && code.data) {
+                      processDecodedCode(code.data);
+                    }
+                  }
+                }
+              } finally {
+                isWorkerBusy = false;
+              }
+            }, 0);
           }
         }
       }
     }
+
     cameraAnimId = requestAnimationFrame(scanCameraLoop);
   }
 
