@@ -3112,59 +3112,6 @@ async function initApp() {
       max-width: 100%;
       box-shadow: 0 2px 8px rgba(245, 158, 11, 0.08);
     }
-    .${uid}-qr-chunk-player {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      gap: 10px;
-      width: 100%;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 12px;
-      padding: 12px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-    }
-    .${uid}-qr-chunk-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      width: 100%;
-      font-size: 12px;
-      color: #334155;
-      font-weight: 600;
-    }
-    .${uid}-qr-chunk-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      background: #eff6ff;
-      color: #2563eb;
-      border: 1px solid #bfdbfe;
-      padding: 3px 8px;
-      border-radius: 9999px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-    .${uid}-qr-chunk-bar-wrap {
-      width: 100%;
-      height: 6px;
-      background: #e2e8f0;
-      border-radius: 9999px;
-      overflow: hidden;
-    }
-    .${uid}-qr-chunk-bar-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #3b82f6, #06b6d4);
-      border-radius: 9999px;
-      transition: width 0.15s ease;
-    }
-    .${uid}-qr-chunk-controls {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      width: 100%;
-    }
 
     /* 扫码与综合导入抽屉弹窗 */
     .${uid}-scan-dialog {
@@ -3253,68 +3200,6 @@ async function initApp() {
       font-size: 12px;
       background: rgba(15, 23, 42, 0.92);
       z-index: 2;
-    }
-    .${uid}-scan-chunk-hud {
-      position: absolute;
-      bottom: 10px;
-      left: 10px;
-      right: 10px;
-      top: auto;
-      background: rgba(15, 23, 42, 0.94);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border: 1px solid rgba(56, 189, 248, 0.4);
-      border-radius: 12px;
-      padding: 10px 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      z-index: 6;
-      color: #ffffff;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-    }
-    .${uid}-scan-chunk-title {
-      font-size: 12px;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      color: #f1f5f9;
-    }
-    .${uid}-scan-chunk-chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-      max-height: 84px;
-      overflow-y: auto;
-      padding: 2px 1px;
-    }
-    @keyframes ${uid}-chunk-pop {
-      0% { transform: scale(0.8); }
-      50% { transform: scale(1.15); }
-      100% { transform: scale(1); }
-    }
-    .${uid}-scan-chunk-dot {
-      min-width: 24px;
-      height: 24px;
-      padding: 0 4px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 10px;
-      font-weight: 700;
-      border-radius: 5px;
-      background: rgba(255, 255, 255, 0.12);
-      color: #cbd5e1;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      transition: all 0.15s ease;
-    }
-    .${uid}-scan-chunk-dot.received {
-      background: linear-gradient(135deg, #10b981, #059669);
-      color: #ffffff;
-      border-color: #34d399;
-      box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
-      animation: ${uid}-chunk-pop 0.25s ease-out;
     }
     .${uid}-scan-frame {
       position: absolute;
@@ -3693,34 +3578,8 @@ async function initApp() {
             <div id="${uid}-qr-overflow-desc" style="font-size: 11px; color: #78350f; text-align: center; line-height: 1.4;">
               当前快照数据超出二维码标准容量上限（约 2KB）。
             </div>
-            <button class="${uid}-btn ${uid}-btn-primary" id="${uid}-btn-start-chunk-qr" style="width: 100%; margin-top: 4px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-              </svg>
-              <span>分片轮播生成 (500ms/帧)</span>
-            </button>
             <div style="font-size: 11px; color: #92400e; background: #fef3c7; padding: 6px 10px; border-radius: 6px; border: 1px dashed #fcd34d; width: 100%;">
-              💡 或使用下方「复制数据」/「导出文件」直接流转
-            </div>
-          </div>
-          <div class="${uid}-qr-chunk-player" id="${uid}-qr-chunk-player" style="display: none;">
-            <div class="${uid}-qr-chunk-header">
-              <span class="${uid}-qr-chunk-badge" id="${uid}-qr-chunk-badge">
-                <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#2563eb;"></span>
-                <span id="${uid}-qr-chunk-idx-text">分片 1 / 1</span>
-              </span>
-              <span style="font-size: 11px; color: #64748b;">500ms / 帧 · 循环播放</span>
-            </div>
-            <div class="${uid}-qr-chunk-bar-wrap">
-              <div class="${uid}-qr-chunk-bar-fill" id="${uid}-qr-chunk-bar-fill" style="width: 0%;"></div>
-            </div>
-            <div class="${uid}-qr-chunk-controls">
-              <button class="${uid}-btn ${uid}-btn-secondary ${uid}-btn-sm" id="${uid}-btn-chunk-prev" title="上一张分片">◀</button>
-              <button class="${uid}-btn ${uid}-btn-primary ${uid}-btn-sm" id="${uid}-btn-chunk-play-toggle" title="暂停/继续播放">
-                <span id="${uid}-chunk-play-icon">⏸ 暂停</span>
-              </button>
-              <button class="${uid}-btn ${uid}-btn-secondary ${uid}-btn-sm" id="${uid}-btn-chunk-next" title="下一张分片">▶</button>
-              <button class="${uid}-btn ${uid}-btn-secondary ${uid}-btn-sm" id="${uid}-btn-chunk-exit" style="margin-left: auto; color: #ef4444;" title="退出分片轮播模式">✕ 退出分片</button>
+              💡 请使用下方「复制数据」或「导出文件」进行数据流转
             </div>
           </div>
           <div id="${uid}-qr-tip" style="font-size: 11px; color: #64748b; text-align: center;">
@@ -3766,21 +3625,6 @@ async function initApp() {
           <!-- 摄像头视口 -->
           <div class="${uid}-camera-viewport" id="${uid}-camera-viewport">
             <video class="${uid}-camera-video" id="${uid}-camera-video" playsinline muted autoplay></video>
-            <!-- 分片接收 HUD 浮层 -->
-            <div class="${uid}-scan-chunk-hud" id="${uid}-scan-chunk-hud" style="display: none;">
-              <div class="${uid}-scan-chunk-title">
-                <span style="display:inline-flex; align-items:center; gap:4px;">
-                  <span style="width:7px; height:7px; border-radius:50%; background:#10b981; display:inline-block;"></span>
-                  <span>分片实时接收中</span>
-                </span>
-                <strong id="${uid}-scan-chunk-progress-text" style="color: #38bdf8;">0 / 0 (0%)</strong>
-              </div>
-              <div class="${uid}-qr-chunk-bar-wrap" style="background: rgba(255,255,255,0.2);">
-                <div class="${uid}-qr-chunk-bar-fill" id="${uid}-scan-chunk-bar-fill" style="width: 0%; background: #10b981;"></div>
-              </div>
-              <div class="${uid}-scan-chunk-chips" id="${uid}-scan-chunk-chips"></div>
-              <div style="font-size: 10px; color: #cbd5e1; text-align: center;">请对准屏幕轮播二维码（支持乱序扫描，全部分片集齐自动完成）</div>
-            </div>
             <div class="${uid}-scan-frame" id="${uid}-scan-frame" style="display: none;">
               <span class="${uid}-scan-corner ${uid}-scan-corner-tl"></span>
               <span class="${uid}-scan-corner ${uid}-scan-corner-tr"></span>
@@ -3900,16 +3744,6 @@ async function initApp() {
   const qrCanvas = shadow.getElementById(`${uid}-qr-canvas`);
   const qrOverflowBox = shadow.getElementById(`${uid}-qr-overflow-box`);
   const qrOverflowDesc = shadow.getElementById(`${uid}-qr-overflow-desc`);
-  const btnStartChunkQr = shadow.getElementById(`${uid}-btn-start-chunk-qr`);
-  const qrChunkPlayer = shadow.getElementById(`${uid}-qr-chunk-player`);
-  const qrChunkBadge = shadow.getElementById(`${uid}-qr-chunk-badge`);
-  const qrChunkIdxText = shadow.getElementById(`${uid}-qr-chunk-idx-text`);
-  const qrChunkBarFill = shadow.getElementById(`${uid}-qr-chunk-bar-fill`);
-  const btnChunkPrev = shadow.getElementById(`${uid}-btn-chunk-prev`);
-  const btnChunkPlayToggle = shadow.getElementById(`${uid}-btn-chunk-play-toggle`);
-  const chunkPlayIcon = shadow.getElementById(`${uid}-chunk-play-icon`);
-  const btnChunkNext = shadow.getElementById(`${uid}-btn-chunk-next`);
-  const btnChunkExit = shadow.getElementById(`${uid}-btn-chunk-exit`);
   const qrTip = shadow.getElementById(`${uid}-qr-tip`);
   const btnDownloadQr = shadow.getElementById(`${uid}-btn-download-qr`);
   const btnCopyQrData = shadow.getElementById(`${uid}-btn-copy-qr-data`);
@@ -3921,10 +3755,6 @@ async function initApp() {
   const scanViewMain = shadow.getElementById(`${uid}-scan-view-main`);
   const scanViewResult = shadow.getElementById(`${uid}-scan-view-result`);
   const cameraVideo = shadow.getElementById(`${uid}-camera-video`);
-  const scanChunkHud = shadow.getElementById(`${uid}-scan-chunk-hud`);
-  const scanChunkProgressText = shadow.getElementById(`${uid}-scan-chunk-progress-text`);
-  const scanChunkBarFill = shadow.getElementById(`${uid}-scan-chunk-bar-fill`);
-  const scanChunkChips = shadow.getElementById(`${uid}-scan-chunk-chips`);
   const scanFrame = shadow.getElementById(`${uid}-scan-frame`);
   const cameraPlaceholder = shadow.getElementById(`${uid}-camera-placeholder`);
   const cameraStatusText = shadow.getElementById(`${uid}-camera-status-text`);
@@ -4451,14 +4281,10 @@ async function initApp() {
   }
 
   // -----------------------------------------------------------------------
-  // 快照二维码展示抽屉逻辑 & 分片轮播播放器
+  // 快照二维码展示抽屉逻辑
   // -----------------------------------------------------------------------
   let currentQrRecord = null;
   let currentQrJson = "";
-  let activeChunks = [];
-  let currentChunkIndex = 0;
-  let chunkCarouselTimer = null;
-  let isChunkPlaying = true;
 
   /**
    * 使用 qrcode-generator 渲染二维码至指定的 Canvas 元素
@@ -4526,131 +4352,8 @@ async function initApp() {
     return null;
   }
 
-  /**
-   * 将较长数据切割成 LSM_CHUNK 分片包
-   * 将单片切片容量优化为 350 字符左右，纠错等级采用 L 级
-   * 二维码 Version 降至 5~7 左右（点阵低密度稀疏，单个点大且清晰）
-   * 极大提升摄像头扫码识别率（从 70% 提升至 99%+，毫秒级快速对焦）
-   */
-  function generateQrChunks(record, jsonStr) {
-    const CHUNK_SIZE = 350; // 每个分片约 350 字符，生成 Version 5~7 低密度稀疏二维码，毫秒级瞬时识别
-    const totalChunks = Math.max(1, Math.ceil(jsonStr.length / CHUNK_SIZE));
-    const chunkId = "chk_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
-    const chunks = [];
-    for (let i = 0; i < totalChunks; i++) {
-      const slice = jsonStr.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-      const payload = {
-        type: "LSM_CHUNK",
-        id: chunkId,
-        idx: i,
-        total: totalChunks,
-        data: slice,
-        name: record ? record.name : "快照"
-      };
-      chunks.push(JSON.stringify(payload));
-    }
-    return chunks;
-  }
-
-  function renderCurrentChunk() {
-    if (!activeChunks || activeChunks.length === 0) return;
-    const text = activeChunks[currentChunkIndex];
-    try {
-      renderQrCodeToCanvas(qrCanvas, text, {
-        size: 260,
-        margin: 2,
-        errorCorrectionLevel: "L",
-        colorDark: "#0f172a",
-        colorLight: "#ffffff"
-      });
-    } catch (err) {
-      console.warn("渲染分片二维码失败:", err);
-    }
-    if (qrChunkIdxText) {
-      qrChunkIdxText.textContent = `分片 ${currentChunkIndex + 1} / ${activeChunks.length}`;
-    }
-    if (qrChunkBarFill) {
-      const pct = Math.round(((currentChunkIndex + 1) / activeChunks.length) * 100);
-      qrChunkBarFill.style.width = `${pct}%`;
-    }
-  }
-
-  function startChunkTimer() {
-    if (chunkCarouselTimer) clearInterval(chunkCarouselTimer);
-    chunkCarouselTimer = setInterval(() => {
-      if (!activeChunks || activeChunks.length <= 1) return;
-      currentChunkIndex = (currentChunkIndex + 1) % activeChunks.length;
-      renderCurrentChunk();
-    }, 500);
-  }
-
-  function startChunkCarousel() {
-    if (!currentQrRecord || !currentQrJson) return;
-    activeChunks = generateQrChunks(currentQrRecord, currentQrJson);
-    currentChunkIndex = 0;
-    isChunkPlaying = true;
-
-    if (qrOverflowBox) qrOverflowBox.style.display = "none";
-    if (qrCanvasWrap) qrCanvasWrap.style.display = "flex";
-    if (qrChunkPlayer) qrChunkPlayer.style.display = "flex";
-    if (qrTip) {
-      qrTip.style.display = "block";
-      qrTip.textContent = `共生成 ${activeChunks.length} 张分片二维码，正在以 500ms/帧 循环轮播`;
-    }
-    if (chunkPlayIcon) chunkPlayIcon.textContent = "⏸ 暂停";
-
-    renderCurrentChunk();
-    startChunkTimer();
-  }
-
-  function stopChunkCarousel() {
-    if (chunkCarouselTimer) {
-      clearInterval(chunkCarouselTimer);
-      chunkCarouselTimer = null;
-    }
-    activeChunks = [];
-    currentChunkIndex = 0;
-    isChunkPlaying = false;
-    if (qrChunkPlayer) qrChunkPlayer.style.display = "none";
-  }
-
-  function toggleChunkPlay() {
-    if (isChunkPlaying) {
-      isChunkPlaying = false;
-      if (chunkCarouselTimer) {
-        clearInterval(chunkCarouselTimer);
-        chunkCarouselTimer = null;
-      }
-      if (chunkPlayIcon) chunkPlayIcon.textContent = "▶ 继续";
-    } else {
-      isChunkPlaying = true;
-      if (chunkPlayIcon) chunkPlayIcon.textContent = "⏸ 暂停";
-      startChunkTimer();
-    }
-  }
-
-  function prevChunk() {
-    if (!activeChunks || activeChunks.length === 0) return;
-    currentChunkIndex = (currentChunkIndex - 1 + activeChunks.length) % activeChunks.length;
-    renderCurrentChunk();
-  }
-
-  function nextChunk() {
-    if (!activeChunks || activeChunks.length === 0) return;
-    currentChunkIndex = (currentChunkIndex + 1) % activeChunks.length;
-    renderCurrentChunk();
-  }
-
-  function exitChunkMode() {
-    stopChunkCarousel();
-    if (qrCanvasWrap) qrCanvasWrap.style.display = "none";
-    if (qrOverflowBox) qrOverflowBox.style.display = "flex";
-    if (qrTip) qrTip.style.display = "none";
-  }
-
   function openQrCodeDialog(record) {
     if (!record) return;
-    stopChunkCarousel();
     currentQrRecord = record;
     qrRecName.textContent = record.name || "未命名快照";
 
@@ -4680,7 +4383,7 @@ async function initApp() {
     const actualKb = (byteLength / 1024).toFixed(1);
 
     // 标准 QR Code Level M 最大容量约 2,331 字节 (~2.2 KB)
-    // 如果超过 2,200 字节，直接判定为超限，显示超限提示及分片轮播生成按钮
+    // 如果超过 2,200 字节，直接判定为超限，显示超限提示
     const QR_MAX_SAFE_BYTES = 2200;
 
     if (byteLength > QR_MAX_SAFE_BYTES) {
@@ -4744,7 +4447,6 @@ async function initApp() {
   }
 
   function closeQrCodeDialog() {
-    stopChunkCarousel();
     qrDialog.classList.remove("open");
     currentQrRecord = null;
     currentQrJson = "";
@@ -4756,12 +4458,11 @@ async function initApp() {
   }
 
   // -----------------------------------------------------------------------
-  // 扫码与综合导入抽屉逻辑 (摄像头 / 图片二维码 / JSON 文件 / 乱序分片接收 / 多线程识别)
+  // 扫码与综合导入抽屉逻辑 (摄像头 / 图片二维码 / JSON 文件 / 多线程识别)
   // -----------------------------------------------------------------------
   let cameraStream = null;
   let cameraAnimId = null;
   let currentScannedSnapshot = null;
-  const chunkScanPool = new Map();
 
   // 多线程扫码识别引擎
   let nativeBarcodeDetector = null;
@@ -4879,71 +4580,8 @@ async function initApp() {
     lastDecodedCode = rawStr;
     lastDecodedTime = now;
 
-    let chunkObj = null;
-    try {
-      const parsed = JSON.parse(rawStr.trim());
-      if (parsed && parsed.type === "LSM_CHUNK" && parsed.id && typeof parsed.idx === "number" && parsed.total && typeof parsed.data === "string") {
-        chunkObj = parsed;
-      }
-    } catch (e) {}
-
-    if (chunkObj) {
-      handleIncomingChunk(chunkObj);
-      // 分片模式：不停止相机，持续在后台线程扫码直到全部集齐
-    } else {
-      // 普通完整二维码：直接停止扫描并解析
-      stopCameraScan();
-      handleQrDecodedString(rawStr);
-    }
-  }
-
-  function updateScanChunkHud(entry) {
-    if (!scanChunkProgressText || !scanChunkBarFill || !scanChunkChips) return;
-    const pct = Math.round((entry.receivedCount / entry.total) * 100);
-    scanChunkProgressText.textContent = `${entry.receivedCount} / ${entry.total} (${pct}%)`;
-    scanChunkBarFill.style.width = `${pct}%`;
-
-    let dotsHtml = "";
-    for (let i = 0; i < entry.total; i++) {
-      const isReceived = entry.chunks[i] !== null;
-      dotsHtml += `<span class="${uid}-scan-chunk-dot ${isReceived ? "received" : ""}" title="分片 ${i + 1}/${entry.total}">${i + 1}</span>`;
-    }
-    scanChunkChips.innerHTML = dotsHtml;
-  }
-
-  function handleIncomingChunk(chunkObj) {
-    const { id, idx, total, data, name } = chunkObj;
-    if (!id || typeof idx !== "number" || !total || typeof data !== "string") return;
-
-    let entry = chunkScanPool.get(id);
-    if (!entry) {
-      entry = {
-        id: id,
-        total: total,
-        name: name || "分片快照",
-        chunks: new Array(total).fill(null),
-        receivedCount: 0,
-        createdAt: Date.now()
-      };
-      chunkScanPool.set(id, entry);
-    }
-
-    if (scanChunkHud) scanChunkHud.style.display = "flex";
-
-    if (entry.chunks[idx] === null) {
-      entry.chunks[idx] = data;
-      entry.receivedCount++;
-      updateScanChunkHud(entry);
-    }
-
-    if (entry.receivedCount === entry.total) {
-      stopCameraScan();
-      if (scanChunkHud) scanChunkHud.style.display = "none";
-      const fullJsonStr = entry.chunks.join("");
-      chunkScanPool.delete(id);
-      showToast(`所有分片 (${total}/${total}) 已完整接收，正在解析快照...`, "success");
-      handleQrDecodedString(fullJsonStr);
-    }
+    stopCameraScan();
+    handleQrDecodedString(rawStr);
   }
 
   function stopCameraScan() {
@@ -5118,11 +4756,6 @@ async function initApp() {
 
   function resetScanModal() {
     stopCameraScan();
-    chunkScanPool.clear();
-    if (scanChunkHud) scanChunkHud.style.display = "none";
-    if (scanChunkProgressText) scanChunkProgressText.textContent = "0 / 0 (0%)";
-    if (scanChunkBarFill) scanChunkBarFill.style.width = "0%";
-    if (scanChunkChips) scanChunkChips.innerHTML = "";
     currentScannedSnapshot = null;
     scanViewMain.style.display = "flex";
     scanViewResult.style.display = "none";
@@ -5137,8 +4770,6 @@ async function initApp() {
 
   function closeScanDialog() {
     stopCameraScan();
-    chunkScanPool.clear();
-    if (scanChunkHud) scanChunkHud.style.display = "none";
     scanDialog.classList.remove("open");
     currentScannedSnapshot = null;
   }
@@ -5153,15 +4784,6 @@ async function initApp() {
       json = JSON.parse(rawStr.trim());
     } catch {
       showToast("二维码解析成功，但内容不是合法的 JSON 快照数据", "error");
-      return;
-    }
-
-    if (json && json.type === "LSM_CHUNK" && json.id && typeof json.idx === "number" && json.total && typeof json.data === "string") {
-      handleIncomingChunk(json);
-      const entry = chunkScanPool.get(json.id);
-      if (entry && entry.receivedCount < entry.total) {
-        showToast(`已暂存分片 ${json.idx + 1}/${json.total}，请继续扫描或导入剩余分片`, "info");
-      }
       return;
     }
 
@@ -5880,13 +5502,6 @@ async function initApp() {
   // 二维码抽屉按钮
   if (btnCloseQr) btnCloseQr.addEventListener("click", () => closeQrCodeDialog());
   if (btnCloseQrBottom) btnCloseQrBottom.addEventListener("click", () => closeQrCodeDialog());
-
-  // 分片轮播播放器事件绑定
-  if (btnStartChunkQr) btnStartChunkQr.addEventListener("click", () => startChunkCarousel());
-  if (btnChunkPlayToggle) btnChunkPlayToggle.addEventListener("click", () => toggleChunkPlay());
-  if (btnChunkPrev) btnChunkPrev.addEventListener("click", () => prevChunk());
-  if (btnChunkNext) btnChunkNext.addEventListener("click", () => nextChunk());
-  if (btnChunkExit) btnChunkExit.addEventListener("click", () => exitChunkMode());
 
   if (btnDownloadQr) {
     btnDownloadQr.addEventListener("click", () => {
