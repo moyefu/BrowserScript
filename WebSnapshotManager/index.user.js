@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网站快照存储与恢复助手
-// @namespace    https://github.com/moyefu/BrowserScript/WebSnapshotManager
-// @version      1.4.2
+// @namespace    https://github.com/moyefu/BrowserScript
+// @version      1.4.3
 // @description  针对指定网站实现快照（Cookie、LocalStorage、SessionStorage）的一键存储、命名、加密备份、GitHub Gist云同步、二维码生成/扫码与一键恢复
 // @author       MOYEFU
 // @icon         https://pic1.imgdb.cn/i/034D4F8VwYLLoU73kkQs3l.gif
@@ -507,6 +507,41 @@ let LSM_UI = null;
       };
     },
 
+    // 获取用户删除自定义主题的墓碑记录
+    getThemeTombstones() {
+      try {
+        const raw = GM_getValue("Config.theme_tombstones", {});
+        return typeof raw === "object" && raw !== null ? raw : {};
+      } catch (e) {
+        return {};
+      }
+    },
+
+    // 保存自定义主题墓碑字典
+    saveThemeTombstones(map) {
+      try {
+        GM_setValue("Config.theme_tombstones", map || {});
+      } catch (e) {}
+    },
+
+    // 记录删除自定义主题墓碑
+    addThemeTombstone(id) {
+      if (!id) return;
+      const tombs = this.getThemeTombstones();
+      tombs[id] = Date.now();
+      this.saveThemeTombstones(tombs);
+    },
+
+    // 移除删除墓碑（如重新创建同名 ID 时）
+    removeThemeTombstone(id) {
+      if (!id) return;
+      const tombs = this.getThemeTombstones();
+      if (tombs[id]) {
+        delete tombs[id];
+        this.saveThemeTombstones(tombs);
+      }
+    },
+
     // 导入自定义主题 JSON
     importTheme(jsonStringOrObj) {
       let parsed = jsonStringOrObj;
@@ -527,8 +562,12 @@ let LSM_UI = null;
       }
 
       customs[theme.id] = theme;
+      this.removeThemeTombstone(theme.id);
       this.saveCustomThemesMap(customs);
       this.setActiveTheme(theme.id);
+      if (typeof GistSyncEngine !== "undefined" && GistSyncEngine.scheduleAutoSync) {
+        GistSyncEngine.scheduleAutoSync();
+      }
       return theme;
     },
 
@@ -552,8 +591,12 @@ let LSM_UI = null;
       const normalized = this.validateAndNormalizeTheme(themeObj);
       const customs = this.getCustomThemes();
       customs[normalized.id] = normalized;
+      this.removeThemeTombstone(normalized.id);
       this.saveCustomThemesMap(customs);
       this.setActiveTheme(normalized.id);
+      if (typeof GistSyncEngine !== "undefined" && GistSyncEngine.scheduleAutoSync) {
+        GistSyncEngine.scheduleAutoSync();
+      }
       return normalized;
     },
 
@@ -567,8 +610,12 @@ let LSM_UI = null;
         delete customs[id];
         this.saveCustomThemesMap(customs);
       }
+      this.addThemeTombstone(id);
       if (GM_getValue("Config.active_theme_id", "") === id) {
         this.resetToDefault();
+      }
+      if (typeof GistSyncEngine !== "undefined" && GistSyncEngine.scheduleAutoSync) {
+        GistSyncEngine.scheduleAutoSync();
       }
     },
 
@@ -2260,11 +2307,13 @@ async function initApp() {
       }
       return {
         format: "LSM_GIST_SYNC",
-        version: "1.3.0",
+        version: "1.4.4",
         lastSyncTime: GM_getValue("Config.sync_last_time", 0),
         totalSnapshots: totalCount,
         records: recordsMap,
-        tombstones: this.getTombstones()
+        tombstones: this.getTombstones(),
+        custom_themes: typeof ThemeEngine !== "undefined" ? ThemeEngine.getCustomThemes() : {},
+        theme_tombstones: typeof ThemeEngine !== "undefined" ? ThemeEngine.getThemeTombstones() : {}
       };
     },
 
@@ -2477,6 +2526,8 @@ async function initApp() {
         isEmpty: false,
         records: (contentObj && typeof contentObj.records === "object") ? contentObj.records : {},
         tombstones: (contentObj && typeof contentObj.tombstones === "object") ? contentObj.tombstones : {},
+        custom_themes: (contentObj && typeof contentObj.custom_themes === "object") ? contentObj.custom_themes : {},
+        theme_tombstones: (contentObj && typeof contentObj.theme_tombstones === "object") ? contentObj.theme_tombstones : {},
         lastSyncTime: contentObj.lastSyncTime || 0,
         version: contentObj.version || "1.0",
         rawGist: res.data
@@ -2489,6 +2540,14 @@ async function initApp() {
 
       const dataToSave = initialData || DB.getAllLocalData();
       dataToSave.lastSyncTime = Date.now();
+      dataToSave.format = "LSM_GIST_SYNC";
+      dataToSave.version = "1.4.4";
+      if (!dataToSave.custom_themes && typeof ThemeEngine !== "undefined") {
+        dataToSave.custom_themes = ThemeEngine.getCustomThemes();
+      }
+      if (!dataToSave.theme_tombstones && typeof ThemeEngine !== "undefined") {
+        dataToSave.theme_tombstones = ThemeEngine.getThemeTombstones();
+      }
 
       const res = await this.httpRequest({
         method: "POST",
@@ -2524,7 +2583,7 @@ async function initApp() {
       const payload = {
         ...dataToSave,
         format: "LSM_GIST_SYNC",
-        version: "1.3.0",
+        version: "1.4.4",
         lastSyncTime: Date.now()
       };
 
@@ -2547,6 +2606,97 @@ async function initApp() {
 
       this.setSyncConfig({ lastSyncTime: payload.lastSyncTime });
       return payload;
+    },
+
+    mergeThemeData(localThemes = {}, remoteThemes = {}, localThemeTombs = {}, remoteThemeTombs = {}) {
+      const lThemes = (localThemes && typeof localThemes === "object") ? localThemes : {};
+      const rThemes = (remoteThemes && typeof remoteThemes === "object") ? remoteThemes : {};
+      const lTombs = (localThemeTombs && typeof localThemeTombs === "object") ? localThemeTombs : {};
+      const rTombs = (remoteThemeTombs && typeof remoteThemeTombs === "object") ? remoteThemeTombs : {};
+
+      // 1. 合并主题墓碑（保留 30 天内最新的删除记录）
+      const mergedTombs = {};
+      const expireThreshold = Date.now() - 30 * 24 * 3600 * 1000;
+      const allTombKeys = new Set([...Object.keys(lTombs), ...Object.keys(rTombs)]);
+      for (const id of allTombKeys) {
+        const lTime = typeof lTombs[id] === "number" ? lTombs[id] : 0;
+        const rTime = typeof rTombs[id] === "number" ? rTombs[id] : 0;
+        const latestTime = Math.max(lTime, rTime);
+        if (latestTime > expireThreshold) {
+          mergedTombs[id] = latestTime;
+        }
+      }
+
+      // 2. 合并自定义主题
+      const mergedThemes = {};
+      const allThemeIds = new Set([...Object.keys(lThemes), ...Object.keys(rThemes)]);
+      let addedFromRemoteThemeCount = 0;
+      let updatedThemeCount = 0;
+      let purgedByThemeTombCount = 0;
+
+      for (const id of allThemeIds) {
+        const lTheme = lThemes[id];
+        const rTheme = rThemes[id];
+        const tombTime = mergedTombs[id] || 0;
+
+        const isThemeDeleted = (t) => {
+          if (!t) return true;
+          const themeTime = t.updatedAt || t.createdAt || 0;
+          return tombTime >= themeTime;
+        };
+
+        if (lTheme && isThemeDeleted(lTheme)) {
+          purgedByThemeTombCount++;
+          continue;
+        }
+        if (rTheme && isThemeDeleted(rTheme)) {
+          purgedByThemeTombCount++;
+          continue;
+        }
+
+        if (lTheme && !rTheme) {
+          mergedThemes[id] = lTheme;
+        } else if (!lTheme && rTheme) {
+          if (typeof ThemeEngine !== "undefined") {
+            try {
+              mergedThemes[id] = ThemeEngine.validateAndNormalizeTheme(rTheme);
+            } catch (e) {
+              mergedThemes[id] = rTheme;
+            }
+          } else {
+            mergedThemes[id] = rTheme;
+          }
+          addedFromRemoteThemeCount++;
+        } else if (lTheme && rTheme) {
+          const lTime = lTheme.updatedAt || lTheme.createdAt || 0;
+          const rTime = rTheme.updatedAt || rTheme.createdAt || 0;
+          if (rTime > lTime) {
+            if (typeof ThemeEngine !== "undefined") {
+              try {
+                mergedThemes[id] = ThemeEngine.validateAndNormalizeTheme(rTheme);
+              } catch (e) {
+                mergedThemes[id] = rTheme;
+              }
+            } else {
+              mergedThemes[id] = rTheme;
+            }
+            updatedThemeCount++;
+          } else {
+            mergedThemes[id] = lTheme;
+          }
+        }
+      }
+
+      return {
+        customThemes: mergedThemes,
+        themeTombstones: mergedTombs,
+        stats: {
+          totalThemes: Object.keys(mergedThemes).length,
+          addedFromRemoteThemeCount,
+          updatedThemeCount,
+          purgedByThemeTombCount
+        }
+      };
     },
 
     mergeSnapshotData(localData, remoteData) {
@@ -2698,13 +2848,30 @@ async function initApp() {
         const localData = DB.getAllLocalData();
         const remoteData = await this.fetchRemoteGist(token, gistId);
 
+        // 1. 合并快照记录与墓碑
         const mergedResult = this.mergeSnapshotData(localData, remoteData);
         DB.applyMergedData(mergedResult.records, mergedResult.tombstones);
 
+        // 2. 合并自定义主题与主题墓碑
+        const mergedThemeResult = this.mergeThemeData(
+          localData.custom_themes || {},
+          remoteData.custom_themes || {},
+          localData.theme_tombstones || {},
+          remoteData.theme_tombstones || {}
+        );
+        if (typeof ThemeEngine !== "undefined") {
+          ThemeEngine.saveCustomThemesMap(mergedThemeResult.customThemes);
+          ThemeEngine.saveThemeTombstones(mergedThemeResult.themeTombstones);
+          ThemeEngine.applyTheme();
+        }
+
+        // 3. 将合并后的完整数据（快照 + 自定义主题）更新回远程 Gist
         await this.updateGist(token, gistId, {
           records: mergedResult.records,
           tombstones: mergedResult.tombstones,
-          totalSnapshots: mergedResult.totalSnapshots
+          totalSnapshots: mergedResult.totalSnapshots,
+          custom_themes: mergedThemeResult.customThemes,
+          theme_tombstones: mergedThemeResult.themeTombstones
         });
 
         this.notifySyncStatus("success");
@@ -2712,17 +2879,29 @@ async function initApp() {
         if (typeof refreshList === "function") {
           refreshList();
         }
+        if (typeof renderThemeList === "function") {
+          renderThemeList();
+        }
+        if (typeof renderQuickThemeMenu === "function") {
+          renderQuickThemeMenu();
+        }
 
         if (!silent && typeof showToast === "function") {
           const s = mergedResult.stats;
-          let msg = `同步成功！当前全域共 ${mergedResult.totalSnapshots} 条快照`;
-          if (s.addedFromRemoteCount > 0 || s.purgedByTombstoneCount > 0) {
-            msg += ` (拉取 +${s.addedFromRemoteCount}，清理已删 -${s.purgedByTombstoneCount})`;
+          const ts = mergedThemeResult.stats;
+          let msg = `同步成功！全域共 ${mergedResult.totalSnapshots} 条快照，${ts.totalThemes} 套自定义主题`;
+          const details = [];
+          if (s.addedFromRemoteCount > 0) details.push(`快照 +${s.addedFromRemoteCount}`);
+          if (s.purgedByTombstoneCount > 0) details.push(`快照清理 -${s.purgedByTombstoneCount}`);
+          if (ts.addedFromRemoteThemeCount > 0) details.push(`主题 +${ts.addedFromRemoteThemeCount}`);
+          if (ts.purgedByThemeTombCount > 0) details.push(`主题清理 -${ts.purgedByThemeTombCount}`);
+          if (details.length > 0) {
+            msg += ` (${details.join("，")})`;
           }
           showToast(msg, "success");
         }
 
-        return { success: true, result: mergedResult };
+        return { success: true, result: mergedResult, themeResult: mergedThemeResult };
       } catch (err) {
         this.notifySyncStatus("error", err.message);
         if (!silent && typeof showToast === "function") {
@@ -3406,6 +3585,10 @@ async function initApp() {
         height: 30px;
         font-size: 11px;
         padding: 0 26px 0 28px;
+      }
+      .${uid}-theme-grid {
+        grid-template-columns: 1fr !important;
+        max-height: 280px;
       }
     }
 
@@ -4167,23 +4350,31 @@ async function initApp() {
     /* 主题管理网格 (Theme Grid) */
     .${uid}-theme-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      max-height: 200px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-auto-rows: max-content;
+      align-content: start;
+      gap: 7px;
+      max-height: 195px;
       overflow-y: auto;
       padding: 2px;
+      box-sizing: border-box;
     }
     .${uid}-theme-item {
       background: var(--lsm-bg-card, #ffffff);
       border: 1px solid var(--lsm-border, #e3e1db);
       border-radius: var(--lsm-radius-card, 10px);
-      padding: 10px;
+      padding: 9px 10px;
       cursor: pointer;
       display: flex;
       flex-direction: column;
+      justify-content: center;
       gap: 6px;
       position: relative;
       transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+      min-width: 0;
+      min-height: 52px;
+      box-sizing: border-box;
+      flex-shrink: 0;
     }
     .${uid}-theme-item:hover {
       border-color: var(--lsm-accent, #c56473);
@@ -4199,7 +4390,10 @@ async function initApp() {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 4px;
+      gap: 6px;
+      min-width: 0;
+      width: 100%;
+      flex-shrink: 0;
     }
     .${uid}-theme-item-title {
       font-weight: 600;
@@ -4208,12 +4402,20 @@ async function initApp() {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      min-width: 0;
+      flex: 1;
+    }
+    .${uid}-theme-item-badge {
+      flex-shrink: 0;
+      white-space: nowrap;
     }
     .${uid}-theme-item-palette {
       display: flex;
       align-items: center;
-      gap: 4px;
-      margin-top: 2px;
+      gap: 5px;
+      margin-top: 1px;
+      flex-shrink: 0;
+      min-height: 14px;
     }
     .${uid}-theme-swatch-dot {
       width: 14px;
@@ -4221,6 +4423,8 @@ async function initApp() {
       border-radius: 50%;
       border: 1px solid rgba(0,0,0,0.12);
       flex-shrink: 0;
+      display: inline-block;
+      box-sizing: border-box;
     }
 
     /* Toast 提示 */
@@ -4796,53 +5000,37 @@ async function initApp() {
 
         <div class="${uid}-theme-body" id="${uid}-theme-body">
           <!-- 当前生效主题卡片 -->
-          <div class="${uid}-theme-current-card" id="${uid}-theme-current-card">
-            <div style="display: flex; align-items: center; justify-content: space-between;">
-              <div style="display: flex; align-items: center; gap: 6px;">
-                <strong id="${uid}-cur-theme-name" style="font-size: 13.5px; color: var(--lsm-text-primary);">Yohaku (余白)</strong>
-                <span class="${uid}-chip" id="${uid}-cur-theme-badge" style="background:var(--lsm-accent-bg);color:var(--lsm-accent);border:1px solid var(--lsm-accent-border);">官方预设</span>
+          <div class="${uid}-theme-current-card" id="${uid}-theme-current-card" style="flex-shrink: 0;">
+            <div style="display: flex; align-items: center; justify-content: space-between; min-width: 0; width: 100%;">
+              <div style="display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;">
+                <strong id="${uid}-cur-theme-name" style="font-size: 13.5px; color: var(--lsm-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">Yohaku (余白)</strong>
+                <span class="${uid}-chip" id="${uid}-cur-theme-badge" style="background:var(--lsm-accent-bg);color:var(--lsm-accent);border:1px solid var(--lsm-accent-border); flex-shrink: 0; white-space: nowrap;">官方预设</span>
               </div>
             </div>
-            <div id="${uid}-cur-theme-desc" style="font-size: 11px; color: var(--lsm-text-secondary); margin-top: 4px; line-height: 1.4;">
+            <div id="${uid}-cur-theme-desc" style="font-size: 11px; color: var(--lsm-text-secondary); margin-top: 4px; line-height: 1.4; word-break: break-word;">
               基于 Innei Yohaku 设计体系的米白纸张与梅红质感主题
             </div>
             <!-- 色板圆点条 -->
-            <div class="${uid}-theme-swatches" id="${uid}-cur-theme-swatches" style="display: flex; gap: 6px; margin-top: 8px; align-items: center;"></div>
+            <div class="${uid}-theme-swatches" id="${uid}-cur-theme-swatches" style="display: flex; gap: 6px; margin-top: 8px; align-items: center; flex-wrap: wrap;"></div>
           </div>
 
           <!-- 主题选择网格 -->
-          <div class="${uid}-input-group">
-            <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div class="${uid}-input-group" style="flex-shrink: 0;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;">
               <label class="${uid}-input-label">可选主题预设与自定义主题</label>
               <span style="font-size: 11px; color: var(--lsm-text-muted);" id="${uid}-theme-count-text">共 5 套</span>
             </div>
             <div class="${uid}-theme-grid" id="${uid}-theme-grid"></div>
           </div>
 
-          <!-- 快捷操作按钮组 -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-            <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-export-theme" title="导出当前主题为 JSON 文件或复制到剪贴板">
-              📤 导出主题 (JSON)
-            </button>
-            <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-import-theme" title="从本地 JSON 文件或剪贴板导入自定义主题">
-              📥 导入主题 (JSON)
-            </button>
-          </div>
-
-          <div style="display: flex; gap: 8px;">
-            <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-toggle-editor" style="flex: 1;">
-              ✏️ 自定义配色微调与新建
-            </button>
-            <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-reset-default-theme" style="color: var(--lsm-accent);">
-              🔄 恢复默认主题
-            </button>
-          </div>
-
-          <!-- 折叠自定义编辑器 -->
-          <div class="${uid}-theme-editor-wrap" id="${uid}-theme-editor-wrap" style="display: none; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--lsm-border); border-radius: 10px; background: var(--lsm-bg-card);">
-            <div style="font-weight: 600; font-size: 12.5px; color: var(--lsm-text-primary);">🎨 新建/微调自定义主题</div>
+          <!-- 折叠自定义编辑器 (展开时位于主题列表与底部操作按钮之间) -->
+          <div class="${uid}-theme-editor-wrap" id="${uid}-theme-editor-wrap" style="display: none; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--lsm-border); border-radius: 10px; background: var(--lsm-bg-card); flex-shrink: 0;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div style="font-weight: 600; font-size: 12.5px; color: var(--lsm-text-primary);" id="${uid}-theme-editor-title">✏️ 修改当前主题配色</div>
+              <button type="button" id="${uid}-btn-cancel-theme-editor" style="background: none; border: none; font-size: 11px; color: var(--lsm-text-muted); cursor: pointer; padding: 2px 4px;">✕ 收起</button>
+            </div>
             <div class="${uid}-input-group">
-              <label class="${uid}-input-label">主题名称</label>
+              <label class="${uid}-input-label" id="${uid}-edit-theme-name-label">主题名称</label>
               <input type="text" class="${uid}-input" id="${uid}-edit-theme-name" placeholder="例如: 薄荷清风" />
             </div>
             <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
@@ -4860,7 +5048,32 @@ async function initApp() {
               </div>
             </div>
             <button class="${uid}-btn ${uid}-btn-primary" id="${uid}-btn-save-custom-theme" style="margin-top: 4px;">
-              💾 保存并立即应用此主题
+              💾 保存并立即应用
+            </button>
+          </div>
+
+          <!-- 快捷操作按钮组 (沉底) -->
+          <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; padding-top: 4px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-export-theme" title="导出当前主题为 JSON 文件或复制到剪贴板">
+                📤 导出主题 (JSON)
+              </button>
+              <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-import-theme" title="从本地 JSON 文件或剪贴板导入自定义主题">
+                📥 导入主题 (JSON)
+              </button>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-edit-theme" title="修改/微调当前主题的配色方案与名称">
+                ✏️ 修改当前配色
+              </button>
+              <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-create-theme" title="基于当前主题创建全新的自定义主题">
+                ➕ 新建自定义主题
+              </button>
+            </div>
+
+            <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-reset-default-theme" style="width: 100%; color: var(--lsm-accent);" title="一键重置为 Yohaku (余白) 官方默认配置">
+              🔄 恢复默认主题
             </button>
           </div>
         </div>
@@ -4980,9 +5193,12 @@ async function initApp() {
   const themeCountText = shadow.getElementById(`${uid}-theme-count-text`);
   const btnExportTheme = shadow.getElementById(`${uid}-btn-export-theme`);
   const btnImportTheme = shadow.getElementById(`${uid}-btn-import-theme`);
-  const btnToggleEditor = shadow.getElementById(`${uid}-btn-toggle-editor`);
+  const btnEditTheme = shadow.getElementById(`${uid}-btn-edit-theme`);
+  const btnCreateTheme = shadow.getElementById(`${uid}-btn-create-theme`);
   const btnResetDefaultTheme = shadow.getElementById(`${uid}-btn-reset-default-theme`);
   const themeEditorWrap = shadow.getElementById(`${uid}-theme-editor-wrap`);
+  const themeEditorTitle = shadow.getElementById(`${uid}-theme-editor-title`);
+  const btnCancelThemeEditor = shadow.getElementById(`${uid}-btn-cancel-theme-editor`);
   const editThemeName = shadow.getElementById(`${uid}-edit-theme-name`);
   const editColorAccent = shadow.getElementById(`${uid}-edit-color-accent`);
   const editColorPaper = shadow.getElementById(`${uid}-edit-color-paper`);
@@ -5002,6 +5218,7 @@ async function initApp() {
     if (scanDialog) scanDialog.classList.remove("open");
     if (syncDialog) syncDialog.classList.remove("open");
     if (themeDialog) themeDialog.classList.remove("open");
+    if (typeof closeThemeEditor === "function") closeThemeEditor();
   }
 
   let tempCapturedData = null;
@@ -6484,8 +6701,8 @@ async function initApp() {
                 </div>
                 ${
                   !isBuiltin
-                    ? `<button class="${uid}-btn-del-theme" data-del-id="${t.id}" style="background:none;border:none;color:var(--lsm-color-danger);font-size:12px;cursor:pointer;padding:1px 4px;" title="删除此自定义主题">✕</button>`
-                    : `<span style="font-size:9.5px;color:var(--lsm-text-muted);background:var(--lsm-bg-header);padding:1px 4px;border-radius:3px;">内置</span>`
+                    ? `<button class="${uid}-btn-del-theme ${uid}-theme-item-badge" data-del-id="${t.id}" style="background:none;border:none;color:var(--lsm-color-danger);font-size:12px;cursor:pointer;padding:1px 4px;line-height:1;flex-shrink:0;white-space:nowrap;" title="删除此自定义主题">✕</button>`
+                    : `<span class="${uid}-theme-item-badge" style="font-size:9.5px;color:var(--lsm-text-muted);background:var(--lsm-bg-header);padding:1px 4px;border-radius:3px;flex-shrink:0;white-space:nowrap;">内置</span>`
                 }
               </div>
               <div class="${uid}-theme-item-palette">
@@ -6506,6 +6723,9 @@ async function initApp() {
           const tid = item.getAttribute("data-theme-id");
           if (tid) {
             const switched = ThemeEngine.setActiveTheme(tid);
+            if (themeEditorMode === "edit") {
+              openThemeEditor("edit");
+            }
             renderThemeList();
             showToast(`已切换为主题: ${switched.name}`, "success");
           }
@@ -6520,7 +6740,11 @@ async function initApp() {
           if (confirm("确定要删除此自定义主题吗？")) {
             try {
               ThemeEngine.deleteCustomTheme(delId);
+              if (themeEditorWrap && themeEditorWrap.style.display !== "none") {
+                closeThemeEditor();
+              }
               renderThemeList();
+              renderQuickThemeMenu();
               showToast("已删除自定义主题", "info");
             } catch (err) {
               showToast(err.message, "error");
@@ -6538,6 +6762,7 @@ async function initApp() {
   }
 
   function closeThemeDialog() {
+    closeThemeEditor();
     if (themeDialog) themeDialog.classList.remove("open");
   }
 
@@ -6628,6 +6853,7 @@ async function initApp() {
   // 恢复默认主题
   if (btnResetDefaultTheme) {
     btnResetDefaultTheme.addEventListener("click", () => {
+      closeThemeEditor();
       ThemeEngine.resetToDefault();
       renderThemeList();
       renderQuickThemeMenu();
@@ -6635,56 +6861,168 @@ async function initApp() {
     });
   }
 
-  // 自定义主题微调展开
-  if (btnToggleEditor) {
-    btnToggleEditor.addEventListener("click", () => {
-      const isHidden = themeEditorWrap.style.display === "none";
-      themeEditorWrap.style.display = isHidden ? "flex" : "none";
-      btnToggleEditor.textContent = isHidden ? "🔼 收起配色编辑器" : "✏️ 自定义配色微调与新建";
-      if (isHidden) {
-        const cur = ThemeEngine.getActiveTheme();
-        if (editThemeName) editThemeName.value = cur.name + " (微调)";
-        if (editColorAccent) editColorAccent.value = cur.tokens.accent.startsWith("#") ? cur.tokens.accent.slice(0, 7) : "#c56473";
-        if (editColorPaper) editColorPaper.value = cur.tokens.bgPaper.startsWith("#") ? cur.tokens.bgPaper.slice(0, 7) : "#faf9f5";
-        if (editColorHeader) editColorHeader.value = cur.tokens.bgHeader.startsWith("#") ? cur.tokens.bgHeader.slice(0, 7) : "#f0efeb";
-      }
-    });
+  // -----------------------------------------------------------------------
+  // 主题配色编辑器交互（修改当前配色 / 新建自定义主题）
+  // -----------------------------------------------------------------------
+  let themeEditorMode = null; // 'edit' | 'create' | null
+
+  function closeThemeEditor() {
+    themeEditorMode = null;
+    if (themeEditorWrap) themeEditorWrap.style.display = "none";
+    if (btnEditTheme) {
+      btnEditTheme.classList.remove(`${uid}-btn-primary`);
+      btnEditTheme.classList.add(`${uid}-btn-secondary`);
+    }
+    if (btnCreateTheme) {
+      btnCreateTheme.classList.remove(`${uid}-btn-primary`);
+      btnCreateTheme.classList.add(`${uid}-btn-secondary`);
+    }
   }
 
-  // 保存新建的自定义主题
+  function openThemeEditor(mode) {
+    if (themeEditorMode === mode && themeEditorWrap && themeEditorWrap.style.display !== "none") {
+      closeThemeEditor();
+      return;
+    }
+
+    themeEditorMode = mode;
+    if (themeEditorWrap) themeEditorWrap.style.display = "flex";
+
+    const cur = ThemeEngine.getActiveTheme();
+    const isEdit = mode === "edit";
+
+    // 切换按钮激活态高亮
+    if (btnEditTheme) {
+      if (isEdit) {
+        btnEditTheme.classList.add(`${uid}-btn-primary`);
+        btnEditTheme.classList.remove(`${uid}-btn-secondary`);
+      } else {
+        btnEditTheme.classList.remove(`${uid}-btn-primary`);
+        btnEditTheme.classList.add(`${uid}-btn-secondary`);
+      }
+    }
+    if (btnCreateTheme) {
+      if (!isEdit) {
+        btnCreateTheme.classList.add(`${uid}-btn-primary`);
+        btnCreateTheme.classList.remove(`${uid}-btn-secondary`);
+      } else {
+        btnCreateTheme.classList.remove(`${uid}-btn-primary`);
+        btnCreateTheme.classList.add(`${uid}-btn-secondary`);
+      }
+    }
+
+    if (themeEditorTitle) {
+      themeEditorTitle.textContent = isEdit ? "✏️ 修改当前主题配色" : "➕ 新建自定义主题";
+    }
+
+    if (btnSaveCustomTheme) {
+      btnSaveCustomTheme.textContent = isEdit ? "💾 保存修改并应用" : "💾 创建并立即应用";
+    }
+
+    if (isEdit) {
+      if (editThemeName) editThemeName.value = cur.name;
+    } else {
+      if (editThemeName) {
+        editThemeName.value = cur.isBuiltin ? `${cur.name} (定制)` : `${cur.name} 副本`;
+      }
+    }
+
+    if (editColorAccent) editColorAccent.value = (cur.tokens.accent && cur.tokens.accent.startsWith("#")) ? cur.tokens.accent.slice(0, 7) : "#c56473";
+    if (editColorPaper) editColorPaper.value = (cur.tokens.bgPaper && cur.tokens.bgPaper.startsWith("#")) ? cur.tokens.bgPaper.slice(0, 7) : "#faf9f5";
+    if (editColorHeader) editColorHeader.value = (cur.tokens.bgHeader && cur.tokens.bgHeader.startsWith("#")) ? cur.tokens.bgHeader.slice(0, 7) : "#f0efeb";
+
+    setTimeout(() => {
+      try {
+        themeEditorWrap.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      } catch (e) {}
+    }, 40);
+  }
+
+  function hexToRgba(hex, alpha) {
+    if (!hex || typeof hex !== "string") return `rgba(197, 100, 115, ${alpha})`;
+    let c = hex.replace("#", "").trim();
+    if (c.length === 3) c = c.split("").map((x) => x + x).join("");
+    if (c.length >= 6) {
+      const r = parseInt(c.slice(0, 2), 16);
+      const g = parseInt(c.slice(2, 4), 16);
+      const b = parseInt(c.slice(4, 6), 16);
+      if (!isNaN(r) && !isNaN(g) && !isNaN(b)) {
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+    }
+    return hex;
+  }
+
+  if (btnEditTheme) {
+    btnEditTheme.addEventListener("click", () => openThemeEditor("edit"));
+  }
+
+  if (btnCreateTheme) {
+    btnCreateTheme.addEventListener("click", () => openThemeEditor("create"));
+  }
+
+  if (btnCancelThemeEditor) {
+    btnCancelThemeEditor.addEventListener("click", closeThemeEditor);
+  }
+
+  // 保存（修改或新建）自定义主题
   if (btnSaveCustomTheme) {
     btnSaveCustomTheme.addEventListener("click", () => {
-      const name = (editThemeName.value || "自定义主题").trim();
-      const accent = editColorAccent.value || "#c56473";
-      const paper = editColorPaper.value || "#faf9f5";
-      const header = editColorHeader.value || "#f0efeb";
+      const isEdit = themeEditorMode === "edit";
+      const name = (editThemeName && editThemeName.value ? editThemeName.value.trim() : "") || (isEdit ? "未命名主题" : "自定义主题");
+      const accent = (editColorAccent && editColorAccent.value) || "#c56473";
+      const paper = (editColorPaper && editColorPaper.value) || "#faf9f5";
+      const header = (editColorHeader && editColorHeader.value) || "#f0efeb";
 
       const baseTheme = ThemeEngine.getActiveTheme();
       const newTokens = Object.assign({}, baseTheme.tokens, {
         accent: accent,
-        accentBg: accent + "14",
-        accentBorder: accent + "4d",
-        accentHoverBg: accent + "24",
-        accentGlow: accent + "1f",
+        accentBg: hexToRgba(accent, 0.08),
+        accentBorder: hexToRgba(accent, 0.3),
+        accentHoverBg: hexToRgba(accent, 0.14),
+        accentGlow: hexToRgba(accent, 0.12),
         bgPaper: paper,
         bgHeader: header,
         bgList: paper,
         bgHover: header
       });
 
-      const newThemeObj = {
-        name: name,
-        description: `基于 ${baseTheme.name} 微调的个性化主题`,
-        tokens: newTokens
-      };
+      let themeObj;
+      if (isEdit && !baseTheme.isBuiltin) {
+        // 修改现有的自定义主题：保留原 ID 与创建时间
+        themeObj = {
+          type: ThemeEngine.SCHEMA_TYPE,
+          version: ThemeEngine.SCHEMA_VERSION,
+          id: baseTheme.id,
+          name: name,
+          description: baseTheme.description || `修改于 ${new Date().toLocaleDateString()}`,
+          isBuiltin: false,
+          tokens: newTokens,
+          createdAt: baseTheme.createdAt || Date.now(),
+          updatedAt: Date.now()
+        };
+      } else {
+        // 新建自定义主题 或 基于官方预设修改后生成独立自定义主题
+        const newId = "custom_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+        themeObj = {
+          type: ThemeEngine.SCHEMA_TYPE,
+          version: ThemeEngine.SCHEMA_VERSION,
+          id: newId,
+          name: name,
+          description: isEdit ? `基于官方预设「${baseTheme.name}」定制的主题` : `基于「${baseTheme.name}」新建的个性化主题`,
+          isBuiltin: false,
+          tokens: newTokens,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        };
+      }
 
       try {
-        const saved = ThemeEngine.saveCustomTheme(newThemeObj);
+        const saved = ThemeEngine.saveCustomTheme(themeObj);
         renderThemeList();
         renderQuickThemeMenu();
-        themeEditorWrap.style.display = "none";
-        btnToggleEditor.textContent = "✏️ 自定义配色微调与新建";
-        showToast(`新主题「${saved.name}」已保存并应用！`, "success");
+        closeThemeEditor();
+        showToast(isEdit ? `主题「${saved.name}」修改已保存并生效！` : `新主题「${saved.name}」已创建并应用！`, "success");
       } catch (err) {
         showToast(`保存失败: ${err.message}`, "error");
       }
