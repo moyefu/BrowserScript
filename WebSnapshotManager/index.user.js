@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网站快照存储与恢复助手
 // @namespace    https://github.com/moyefu/BrowserScript
-// @version      1.4.3
+// @version      1.4.4
 // @description  针对指定网站实现快照（Cookie、LocalStorage、SessionStorage）的一键存储、命名、加密备份、GitHub Gist云同步、二维码生成/扫码与一键恢复
 // @author       MOYEFU
 // @icon         https://pic1.imgdb.cn/i/034D4F8VwYLLoU73kkQs3l.gif

@@ -21,11 +21,13 @@
 - **内存安全擦除**：在完成加解密后立即调用 `wipeMemory` 擦除内存中残留的明文凭据对象。
 - **Trusted Types 严格 CSP 兼容 (v1.4.1+)**：首部自动注册全局 `default` Trusted Types 策略，彻底兼容 GitHub、Google 等开启了 `require-trusted-types-for 'script'` 严格 CSP 的页面，消除 `TrustedHTML` 报错。
 
-### 3. ☁️ GitHub Gist 云同步与智能双向合并
+### 3. ☁️ GitHub Gist 云同步与智能双向合并 (v1.4.4)
 - **墓碑机制 (Tombstones) 彻底防复活**：本地删除快照自动产生带时间戳的墓碑标记，同步时精准剔除云端对应数据，内置 30 天自动垃圾回收。
 - **双向互补无损增量合并**：两端独有数据自动合并互补，共有数据按 `updatedAt` 保留最新版本，100% 保证数据不丢失。
-- **全自动防抖与静默拉取**：快照增删改后防抖 2 秒自动同步；打开面板距上次同步超过 5 分钟自动静默拉取。
-- **可视化 Gist 搜索与一键绑定**：支持实时模糊检索账号下已有 Gist，一键创建专属 Secret Gist 并自动绑定。
+- **全新防打扰空闲自动同步**：智能监测网页与 Shadow DOM 用户操作活跃度及插件使用状态，连续空闲达到设定时长（默认 5 分钟，支持 1~1440 分钟自由配置）自动静默增量同步，避免操作打扰与并发冲突。
+- **高容错容灾与智能数据恢复**：支持 GitHub Gist 大文件截断自动探测与 Raw URL 兜底拉取；内置智能 JSON 解析器与分块容错扫描引擎，支持自动剥离 BOM 与末尾多余逗号，对损坏数据实现最大化局部拯救。
+- **细粒度数据清洗与健康校验**：严格校验快照载荷、加密密文结构与主题/墓碑有效性，跳过脏数据并在同步卡片中展示忽略统计。
+- **可视化 Gist 搜索与一键绑定/自动创建**：支持实时模糊检索账号下已有 Gist 并置顶推荐备份文件；弹窗内嵌「🚀 自动创建 Gist」快捷入口，并在空数据/无匹配项时智能引导一键创建并绑定 Secret Gist。
 
 ### 4. 🎨 结构化 JSON 主题系统与自定义导入/导出
 - **解耦式 JSON 主题架构 (`ThemeEngine`)**：
@@ -64,7 +66,7 @@
 
 ---
 
-### 6. 🛡️ 严格 CSP 与 Trusted Types 深度兼容
+### 7. 🛡️ 严格 CSP 与 Trusted Types 深度兼容
 - **多策略智能白名单适配**：自动探测并注册 `default`, `snapshotPolicy`, `goog#html`, `dompurify` 等受信任策略，全面兼容 `window.trustedTypes` 与 `unsafeWindow.trustedTypes`。
 - **安全降级渲染引擎 (`setSafeInnerHTML`)**：内置三级 DOM 安全注入降级方案，彻底解决在 GitHub、Google 等开启了 `require-trusted-types-for 'script'` 严格 CSP 的网站上运行报错的问题。
 - **全局 Setter 拦截器**：透明拦截与转译 `innerHTML` 字符串赋值，确保全场景 100% 稳健运行。
@@ -81,7 +83,8 @@
 | `Config.host_list` | 域名列表 (每行一条) | 多行文本 (`textarea`) | `""` (空) | 匹配的域名与 URL 规则列表。支持完整 URL、域名或带 `*` 的通配符（如 `*.example.com` 或 `https://*.baidu.com*`）。每行一条。 |
 | `Config.enable_encryption` | 本地数据加密 | 布尔开关 (`checkbox`) | `false` | 启用 AES-GCM 256 位本地数据加密存储。 |
 | `Config.auto_reload_after_restore`| 恢复后直接刷新/跳转 | 布尔开关 (`checkbox`) | `false` | 恢复快照成功后直接刷新或跳转至来源页面（不再弹窗确认）。 |
-| `Config.sync_auto` | 快照变更时自动同步 | 布尔开关 (`checkbox`) | `false` | 本地快照新增、改名、删除时，防抖 2 秒自动同步至 GitHub Gist。 |
+| `Config.sync_auto` | 空闲时自动同步 | 布尔开关 (`checkbox`) | `false` | 无操作达到设定时长且未使用插件时静默增量同步至 GitHub Gist。 |
+| `Config.sync_idle_minutes` | 自动同步空闲时长(分钟) | 整数数值 (`number`) | `5` | 触发自动静默同步所需的连续无操作时长 (1~1440 分钟，默认 5 分钟)。 |
 | `Config.sync_gist_token` | GitHub Gist Token | 文本 (`text`) | `""` (空) | 用于云同步的 GitHub Personal Access Token（需勾选 gist 权限）。 |
 
 ---

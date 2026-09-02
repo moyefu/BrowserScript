@@ -22,7 +22,7 @@
 
 | 目录 / 脚本名称 | 当前版本 | 适用环境 | 核心功能速览 | 详细文档 |
 | :--- | :--- | :--- | :--- | :--- |
-| [**WebSnapshotManager**](./WebSnapshotManager) <br> **网站快照存储与恢复助手** | `v1.4.3` | 通用全站 | Cookie（全量/HttpOnly）、LocalStorage、SessionStorage 一键捕获；AES-GCM 硬件级加密与 Trusted Types 严格 CSP 兼容；GitHub Gist 云同步；二维码生成展示/分片轮播/扫码识别恢复；多账号极速切换与跨设备导入导出。 | [查看文档](./WebSnapshotManager/README.md) |
+| [**WebSnapshotManager**](./WebSnapshotManager) <br> **网站快照存储与恢复助手** | `v1.4.4` | 通用全站 | Cookie（全量/HttpOnly）、LocalStorage、SessionStorage 一键捕获；AES-GCM 硬件级加密与 Trusted Types 严格 CSP 兼容；GitHub Gist 高容错容灾云同步与防打扰空闲自动同步；二维码生成展示/分片轮播/扫码识别恢复；多账号极速切换与跨设备导入导出。 | [查看文档](./WebSnapshotManager/README.md) |
 | [**AiAgent**](./AiAgent) <br> **ScriptCat Agent 悬浮聊天窗** | `v1.15.0` | **ScriptCat Beta** *(必须)* | 悬浮球式可拖拽 AI 聊天窗；ScriptCat 原生 Agent API 驱动（需 Beta 版）；流式对话、模型切换、多会话管理与白名单站点控制。 | [查看文档](./AiAgent/README.md) |
 | [**CpaToGrok2Api**](./CpaToGrok2Api) <br> **Grok CPA 转 Grok2Api Json** | `v0.1.0` | CPA 站点 | 自动感知 CPA 登录状态；实时并发检测 xAI 账号额度；纯前端原生解析 JWT Payload；一键转换并批量导出标准 Grok2Api JSON。 | [查看文档](./CpaToGrok2Api/README.md) |
 | [**BlockWebsites**](./BlockWebsites) <br> **禁止打开的网页 (防沉迷)** | `v0.4.0` | 通用全站 | 灵活的网址通配符匹配；支持 `(HH-HH)`、`(HH:MM-HH:MM)`、`(HH:MM:SS-HH:MM:SS)` 多精度时间段限制；秒级自动关闭网页与降级拦截屏。 | [查看文档](./BlockWebsites/README.md) |
