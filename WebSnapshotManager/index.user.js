@@ -51,10 +51,17 @@ Config:
     type: checkbox
     default: false
   sync_auto:
-    title: 快照变更时自动同步
-    description: 本地快照新增、改名、删除时，防抖 2 秒自动同步至 GitHub Gist
+    title: 空闲时自动同步
+    description: 自动同步至 GitHub Gist（检测空闲且未使用插件时静默同步）
     type: checkbox
     default: false
+  sync_idle_minutes:
+    title: 自动同步空闲时长 (分钟)
+    description: 检测无网页操作且无插件操作达到该时长后触发自动同步（默认5分钟）
+    type: number
+    default: 5
+    min: 1
+    max: 1440
   sync_gist_token:
     title: GitHub Gist Token
     description: 用于云同步的 GitHub Personal Access Token（需勾选 gist 权限）
@@ -2352,7 +2359,10 @@ async function initApp() {
   const GistSyncEngine = {
     GIST_FILENAME: "web_snapshot_manager_sync.json",
     syncLock: false,
-    autoSyncTimer: null,
+    hasPendingChanges: false,
+    idleMonitorTimer: null,
+    lastActivityTime: Date.now(),
+    _activityListenersInitialized: false,
 
     httpRequest(options) {
       return new Promise((resolve, reject) => {
@@ -2432,6 +2442,11 @@ async function initApp() {
       return Boolean(GM_getValue("Config.sync_auto", false));
     },
 
+    getIdleMinutes() {
+      const val = Number(GM_getValue("Config.sync_idle_minutes", 5));
+      return (!isNaN(val) && val > 0) ? Math.max(1, Math.floor(val)) : 5;
+    },
+
     getLastSyncTime() {
       return GM_getValue("Config.sync_last_time", 0);
     },
@@ -2439,7 +2454,17 @@ async function initApp() {
     setSyncConfig(config) {
       if (typeof config.token === "string") GM_setValue("Config.sync_gist_token", config.token.trim());
       if (typeof config.gistId === "string") GM_setValue("Config.sync_gist_id", config.gistId.trim());
-      if (typeof config.autoSync === "boolean") GM_setValue("Config.sync_auto", config.autoSync);
+      if (typeof config.autoSync === "boolean") {
+        GM_setValue("Config.sync_auto", config.autoSync);
+        if (config.autoSync) {
+          this.startIdleSyncMonitor();
+        } else {
+          this.stopIdleSyncMonitor();
+        }
+      }
+      if (typeof config.idleMinutes === "number" && config.idleMinutes > 0) {
+        GM_setValue("Config.sync_idle_minutes", Math.max(1, Math.floor(config.idleMinutes)));
+      }
       if (typeof config.lastSyncTime === "number") GM_setValue("Config.sync_last_time", config.lastSyncTime);
     },
 
@@ -3157,30 +3182,134 @@ async function initApp() {
       }
     },
 
+    recordActivity() {
+      this.lastActivityTime = Date.now();
+    },
+
+    isPluginInUse() {
+      try {
+        if (typeof LSM_UI !== "undefined" && typeof LSM_UI.isInUse === "function") {
+          return LSM_UI.isInUse();
+        }
+      } catch (e) {}
+      return false;
+    },
+
+    initActivityListeners(shadowRoot) {
+      if (this._activityListenersInitialized) {
+        if (shadowRoot) {
+          this._bindShadowActivity(shadowRoot);
+        }
+        return;
+      }
+      this._activityListenersInitialized = true;
+
+      const onActivity = () => {
+        this.recordActivity();
+      };
+
+      const events = [
+        "mousemove", "mousedown", "mouseup", "keydown", "keyup",
+        "scroll", "wheel", "touchstart", "touchend", "touchmove",
+        "pointerdown", "pointermove", "input", "change", "focus"
+      ];
+
+      events.forEach((ev) => {
+        try {
+          window.addEventListener(ev, onActivity, { capture: true, passive: true });
+        } catch (e) {}
+      });
+
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          this.recordActivity();
+        }
+      });
+
+      if (shadowRoot) {
+        this._bindShadowActivity(shadowRoot);
+      }
+
+      if (this.isAutoSyncEnabled()) {
+        this.startIdleSyncMonitor();
+      }
+    },
+
+    _bindShadowActivity(shadowRoot) {
+      if (!shadowRoot || shadowRoot._lsmActivityBound) return;
+      shadowRoot._lsmActivityBound = true;
+      const onActivity = () => {
+        this.recordActivity();
+      };
+      const events = ["mousedown", "mouseup", "click", "keydown", "input", "scroll", "touchstart"];
+      events.forEach((ev) => {
+        try {
+          shadowRoot.addEventListener(ev, onActivity, { capture: true, passive: true });
+        } catch (e) {}
+      });
+    },
+
     scheduleAutoSync() {
       if (!this.isAutoSyncEnabled()) return;
       const token = this.getToken();
       const gistId = this.getGistId();
       if (!token || !gistId) return;
 
-      if (this.autoSyncTimer) {
-        clearTimeout(this.autoSyncTimer);
-      }
-      this.autoSyncTimer = setTimeout(() => {
-        this.twoWaySync({ silent: true, checkConflict: false });
-      }, 2000);
+      this.hasPendingChanges = true;
+      this.startIdleSyncMonitor();
     },
 
-    checkSyncOnOpen() {
+    startIdleSyncMonitor() {
+      if (this.idleMonitorTimer) return;
+      this.idleMonitorTimer = setInterval(() => {
+        this.checkAndTriggerIdleSync();
+      }, 10000);
+    },
+
+    stopIdleSyncMonitor() {
+      if (this.idleMonitorTimer) {
+        clearInterval(this.idleMonitorTimer);
+        this.idleMonitorTimer = null;
+      }
+    },
+
+    async checkAndTriggerIdleSync() {
       if (!this.isAutoSyncEnabled()) return;
       const token = this.getToken();
       const gistId = this.getGistId();
       if (!token || !gistId) return;
+      if (this.syncLock) return;
 
-      const last = this.getLastSyncTime();
+      // 1. 如果用户当前正在使用插件（窗口、抽屉、菜单打开），严禁触发自动同步
+      if (this.isPluginInUse()) return;
+
+      const idleLimitMs = this.getIdleMinutes() * 60 * 1000;
       const now = Date.now();
-      if (!last || now - last > 5 * 60 * 1000) {
-        this.twoWaySync({ silent: true, checkConflict: false });
+      const idleTime = now - this.lastActivityTime;
+
+      // 2. 网页与插件必须处于空闲状态（无操作满 N 分钟）
+      if (idleTime < idleLimitMs) return;
+
+      // 3. 满足触发条件：存在待同步的变更，或自上次同步后超过设定空闲时长
+      const lastSync = this.getLastSyncTime();
+      const needSync = this.hasPendingChanges || (!lastSync || (now - lastSync >= idleLimitMs));
+
+      if (needSync) {
+        try {
+          const res = await this.twoWaySync({ silent: true, checkConflict: false });
+          if (res && res.success) {
+            this.hasPendingChanges = false;
+          }
+        } catch (err) {
+          console.warn("[GistSync] 空闲自动同步失败:", err);
+        }
+      }
+    },
+
+    checkSyncOnOpen() {
+      // 用户在使用插件时不主动发起网络同步，仅更新状态
+      if (typeof updateCloudStatusUI === "function") {
+        updateCloudStatusUI();
       }
     },
 
@@ -5213,13 +5342,22 @@ async function initApp() {
           <!-- 自动同步选项 -->
           <div class="${uid}-sync-toggle-row">
             <div>
-              <div style="font-size: 12.5px; font-weight: 600; color: #24231f;">快照变更时自动同步</div>
-              <div style="font-size: 11px; color: #787670;">本地保存、修改、删除快照后 2 秒防抖自动同步</div>
+              <div style="font-size: 12.5px; font-weight: 600; color: #24231f;">空闲时自动同步</div>
+              <div style="font-size: 11px; color: #787670;">无操作达到设定时长且未使用插件时静默同步</div>
             </div>
             <label class="${uid}-switch">
               <input type="checkbox" id="${uid}-sync-switch-auto" />
               <span class="${uid}-slider"></span>
             </label>
+          </div>
+
+          <!-- 自动同步空闲时长设置 -->
+          <div class="${uid}-input-group" id="${uid}-sync-idle-group">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+              <label class="${uid}-input-label" style="margin-bottom: 0;">空闲触发时长 (分钟)</label>
+              <span style="font-size: 11px; color: #787670;">无操作满设定时间后触发</span>
+            </div>
+            <input type="number" class="${uid}-input" id="${uid}-sync-input-idle" min="1" max="1440" step="1" value="5" placeholder="默认 5 分钟" />
           </div>
 
           <!-- 主同步按钮 -->
@@ -5409,6 +5547,7 @@ async function initApp() {
   const syncInputToken = shadow.getElementById(`${uid}-sync-input-token`);
   const btnToggleTokenEye = shadow.getElementById(`${uid}-btn-toggle-token-eye`);
   const syncInputGistId = shadow.getElementById(`${uid}-sync-input-gist-id`);
+  const syncInputIdle = shadow.getElementById(`${uid}-sync-input-idle`);
   const btnSearchGists = shadow.getElementById(`${uid}-btn-search-gists`);
   const btnAutoCreateGist = shadow.getElementById(`${uid}-btn-auto-create-gist`);
   const btnTestToken = shadow.getElementById(`${uid}-btn-test-token`);
@@ -6673,6 +6812,7 @@ async function initApp() {
     if (syncDialog) syncDialog.scrollTop = 0;
     if (syncInputToken) syncInputToken.value = GistSyncEngine.getToken();
     if (syncInputGistId) syncInputGistId.value = GistSyncEngine.getGistId();
+    if (syncInputIdle) syncInputIdle.value = GistSyncEngine.getIdleMinutes();
     if (syncSwitchAuto) syncSwitchAuto.checked = GistSyncEngine.isAutoSyncEnabled();
     updateCloudStatusUI();
     syncDialog.classList.add("open");
@@ -7476,11 +7616,13 @@ async function initApp() {
       const tokenVal = syncInputToken ? syncInputToken.value.trim() : "";
       const gistVal = syncInputGistId ? syncInputGistId.value.trim() : "";
       const autoVal = syncSwitchAuto ? syncSwitchAuto.checked : false;
+      const idleVal = syncInputIdle ? Number(syncInputIdle.value.trim()) : 5;
 
       GistSyncEngine.setSyncConfig({
         token: tokenVal,
         gistId: gistVal,
-        autoSync: autoVal
+        autoSync: autoVal,
+        idleMinutes: (!isNaN(idleVal) && idleVal > 0) ? Math.floor(idleVal) : 5
       });
       updateCloudStatusUI();
       showToast("云同步配置已保存！", "success");
@@ -7491,7 +7633,8 @@ async function initApp() {
     syncSwitchAuto.addEventListener("change", (e) => {
       const enabled = e.target.checked;
       GistSyncEngine.setSyncConfig({ autoSync: enabled });
-      showToast(enabled ? "已开启快照变更时自动同步 (2秒防抖)" : "已关闭快照自动同步", "info");
+      const idleMin = GistSyncEngine.getIdleMinutes();
+      showToast(enabled ? `已开启自动同步 (空闲 ${idleMin} 分钟触发)` : "已关闭快照自动同步", "info");
     });
   }
 
@@ -8123,6 +8266,21 @@ async function initApp() {
     }
   }
 
+  const isInUse = () => {
+    try {
+      if (win && win.style.display !== "none" && !win.classList.contains("hidden")) {
+        return true;
+      }
+      if (document.querySelector(".lsm-dlg-mask, .lsm-gist-picker-mask, .lsm-conflict-mask, .lsm-diff-mask, .lsm-qrcode-preview-mask")) {
+        return true;
+      }
+      if (shadow && shadow.querySelector(".open")) {
+        return true;
+      }
+    } catch {}
+    return false;
+  };
+
   // 暴露给全局控制器
   LSM_UI = {
     ball,
@@ -8131,6 +8289,15 @@ async function initApp() {
     openThemeDialog,
     closeWindow,
     openCloudSyncDialog,
-    closeCloudSyncDialog
+    closeCloudSyncDialog,
+    isInUse
   };
+
+  // 初始化用户活动监听器与空闲同步监控
+  if (typeof GistSyncEngine !== "undefined") {
+    GistSyncEngine.initActivityListeners(shadow);
+    if (GistSyncEngine.isAutoSyncEnabled()) {
+      GistSyncEngine.startIdleSyncMonitor();
+    }
+  }
 }
