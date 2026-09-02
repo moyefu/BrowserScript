@@ -5313,18 +5313,13 @@ async function initApp() {
             </div>
           </div>
 
-          <!-- Gist ID 输入、搜索与自动创建 -->
+          <!-- Gist ID 输入与选择 -->
           <div class="${uid}-input-group">
-            <div style="display: flex; align-items: center; justify-content: space-between;">
-              <label class="${uid}-input-label">Gist ID (留空可点击右侧自动创建)</label>
-              <button type="button" id="${uid}-btn-search-gists" style="font-size: 11px; color: #c56473; background: none; border: none; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 3px; font-weight: 600;" title="从 GitHub 获取并搜索选择已有 Gist">
-                <span>📋 搜索/选择已有 Gist</span>
-              </button>
-            </div>
+            <label class="${uid}-input-label">Gist ID</label>
             <div style="display: flex; gap: 6px;">
               <input type="text" class="${uid}-input" id="${uid}-sync-input-gist-id" placeholder="例如：a1b2c3d4e5f6..." style="flex: 1;" />
-              <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-auto-create-gist" style="white-space: nowrap;" title="在 GitHub 上自动创建一个私有 Gist 并填入此处">
-                🚀 自动创建 Gist
+              <button class="${uid}-btn ${uid}-btn-secondary" id="${uid}-btn-search-gists" style="white-space: nowrap;" title="从 GitHub 获取并搜索选择已有 Gist，或自动创建">
+                📋 选择 Gist
               </button>
             </div>
           </div>
@@ -5549,7 +5544,6 @@ async function initApp() {
   const syncInputGistId = shadow.getElementById(`${uid}-sync-input-gist-id`);
   const syncInputIdle = shadow.getElementById(`${uid}-sync-input-idle`);
   const btnSearchGists = shadow.getElementById(`${uid}-btn-search-gists`);
-  const btnAutoCreateGist = shadow.getElementById(`${uid}-btn-auto-create-gist`);
   const btnTestToken = shadow.getElementById(`${uid}-btn-test-token`);
   const btnSaveSyncConfig = shadow.getElementById(`${uid}-btn-save-sync-config`);
   const syncSwitchAuto = shadow.getElementById(`${uid}-sync-switch-auto`);
@@ -6846,11 +6840,6 @@ async function initApp() {
       return;
     }
 
-    if (!gists.length) {
-      showToast("当前 GitHub 账号下未找到任何 Gist，请点击「🚀 自动创建 Gist」", "info");
-      return;
-    }
-
     const mask = document.createElement("div");
     mask.className = "lsm-dlg-mask lsm-gist-picker-mask";
     mask.style.cssText =
@@ -6860,25 +6849,38 @@ async function initApp() {
 
     const box = document.createElement("div");
     box.style.cssText =
-      "width:480px;max-width:calc(100vw - 32px);max-height:85vh;background:#faf9f5;border:1px solid #e3e1db;border-radius:16px;" +
+      "width:520px;max-width:calc(100vw - 32px);max-height:85vh;background:#faf9f5;border:1px solid #e3e1db;border-radius:16px;" +
       "padding:20px 22px;box-shadow:0 20px 45px -10px rgba(36,35,31,0.18),0 1px 3px rgba(0,0,0,0.04);box-sizing:border-box;" +
       "display:flex;flex-direction:column;gap:12px;animation:lsmFadeIn .2s cubic-bezier(0.16,1,0.3,1);";
 
     const headerRow = document.createElement("div");
-    headerRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;";
+    headerRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
     headerRow.innerHTML = `
-      <div style="display:flex;align-items:center;gap:6px;">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c56473" stroke-width="2">
-          <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
-        </svg>
-        <span style="font-weight:600;font-size:15px;color:#24231f;">选择已有 Gist 进行绑定 (${gists.length})</span>
+      <div style="display:flex;align-items:center;gap:10px;flex:1;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c56473" stroke-width="2">
+            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+          </svg>
+          <span style="font-weight:600;font-size:14.5px;color:#24231f;">选择已有 Gist 进行绑定 (${gists.length})</span>
+        </div>
+        <button type="button" class="lsm-picker-auto-create-btn" style="font-size:11.5px;color:#c56473;background:rgba(197,100,115,0.08);border:1px solid rgba(197,100,115,0.25);border-radius:6px;padding:3px 9px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;transition:all .15s;" title="在 GitHub 上自动创建一个专属私有 Gist 并绑定">
+          🚀 自动创建 Gist
+        </button>
       </div>
-      <button class="lsm-picker-close-btn" style="border:none;background:none;font-size:16px;color:#787670;cursor:pointer;padding:4px;transition:color .15s;" title="关闭">✕</button>
+      <button class="lsm-picker-close-btn" style="border:none;background:none;font-size:16px;color:#787670;cursor:pointer;padding:4px;transition:color .15s;flex-shrink:0;" title="关闭">✕</button>
     `;
 
     const closeBtn = headerRow.querySelector(".lsm-picker-close-btn");
     closeBtn.addEventListener("mouseenter", () => closeBtn.style.color = "#24231f");
     closeBtn.addEventListener("mouseleave", () => closeBtn.style.color = "#787670");
+
+    const autoCreateBtn = headerRow.querySelector(".lsm-picker-auto-create-btn");
+    autoCreateBtn.addEventListener("mouseenter", () => {
+      autoCreateBtn.style.background = "rgba(197,100,115,0.15)";
+    });
+    autoCreateBtn.addEventListener("mouseleave", () => {
+      autoCreateBtn.style.background = "rgba(197,100,115,0.08)";
+    });
 
     const searchInput = document.createElement("input");
     searchInput.type = "text";
@@ -6903,9 +6905,47 @@ async function initApp() {
     const close = () => mask.remove();
     closeBtn.addEventListener("click", close);
 
+    const doCreateGist = async () => {
+      try {
+        showToast("正在 GitHub 创建 Secret Gist...", "info");
+        if (autoCreateBtn) autoCreateBtn.disabled = true;
+        const res = await GistSyncEngine.createGist(t);
+        if (syncInputGistId) {
+          syncInputGistId.value = res.gistId;
+        }
+        GistSyncEngine.setSyncConfig({ token: t, gistId: res.gistId });
+        showToast("Gist 创建并绑定成功！", "success");
+        updateCloudStatusUI();
+        close();
+      } catch (err) {
+        showToast(`创建 Gist 失败: ${err.message}`, "error");
+      } finally {
+        if (autoCreateBtn) autoCreateBtn.disabled = false;
+      }
+    };
+
+    autoCreateBtn.addEventListener("click", doCreateGist);
+
     function renderGists(filterText = "") {
       listContainer.innerHTML = "";
       const q = filterText.toLowerCase().trim();
+
+      if (!gists.length) {
+        const emptyDiv = document.createElement("div");
+        emptyDiv.style.cssText = "text-align:center;padding:32px 16px;color:#787670;font-size:12.5px;display:flex;flex-direction:column;align-items:center;gap:12px;";
+        emptyDiv.innerHTML = `
+          <div>当前 GitHub 账号下暂无任何 Gist 记录</div>
+          <button type="button" class="lsm-empty-create-btn" style="padding:7px 18px;background:#c56473;color:#ffffff;border:none;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(197,100,115,0.25);transition:background .15s;">
+            🚀 立即自动创建专属 Gist
+          </button>
+        `;
+        const emptyBtn = emptyDiv.querySelector(".lsm-empty-create-btn");
+        emptyBtn.addEventListener("mouseenter", () => emptyBtn.style.background = "#b55362");
+        emptyBtn.addEventListener("mouseleave", () => emptyBtn.style.background = "#c56473");
+        emptyBtn.addEventListener("click", doCreateGist);
+        listContainer.appendChild(emptyDiv);
+        return;
+      }
 
       const filtered = gists.filter((g) => {
         if (!q) return true;
@@ -6917,7 +6957,19 @@ async function initApp() {
       });
 
       if (!filtered.length) {
-        listContainer.innerHTML = `<div style="text-align:center;padding:24px;color:#787670;font-size:12px;">未匹配到符合条件的 Gist</div>`;
+        const emptySearchDiv = document.createElement("div");
+        emptySearchDiv.style.cssText = "text-align:center;padding:24px 16px;color:#787670;font-size:12px;display:flex;flex-direction:column;align-items:center;gap:10px;";
+        emptySearchDiv.innerHTML = `
+          <div>未匹配到符合条件的 Gist</div>
+          <button type="button" class="lsm-empty-create-btn" style="padding:6px 14px;background:rgba(197,100,115,0.08);color:#c56473;border:1px solid rgba(197,100,115,0.3);border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;">
+            🚀 自动新建专属 Gist
+          </button>
+        `;
+        const emptyBtn = emptySearchDiv.querySelector(".lsm-empty-create-btn");
+        emptyBtn.addEventListener("mouseenter", () => emptyBtn.style.background = "rgba(197,100,115,0.15)");
+        emptyBtn.addEventListener("mouseleave", () => emptyBtn.style.background = "rgba(197,100,115,0.08)");
+        emptyBtn.addEventListener("click", doCreateGist);
+        listContainer.appendChild(emptySearchDiv);
         return;
       }
 
@@ -6992,8 +7044,6 @@ async function initApp() {
     document.documentElement.appendChild(mask);
     setTimeout(() => searchInput.focus(), 50);
   }
-  
-
 
   // -----------------------------------------------------------------------
   // 主题抽屉渲染与交互控制器
@@ -7580,34 +7630,6 @@ async function initApp() {
   if (btnSearchGists) {
     btnSearchGists.addEventListener("click", () => {
       showGistPickerModal();
-    });
-  }
-
-  if (btnAutoCreateGist) {
-    btnAutoCreateGist.addEventListener("click", async () => {
-      const tokenVal = syncInputToken ? syncInputToken.value.trim() : "";
-      if (!tokenVal) {
-        showToast("请先填写有效的 GitHub Token", "error");
-        if (syncInputToken) syncInputToken.focus();
-        return;
-      }
-      if (confirm("是否立即在 GitHub 上创建一个专属私有 Gist 用于存储快照同步数据？")) {
-        try {
-          showToast("正在 GitHub 创建 Secret Gist...", "info");
-          btnAutoCreateGist.disabled = true;
-          const res = await GistSyncEngine.createGist(tokenVal);
-          if (syncInputGistId) {
-            syncInputGistId.value = res.gistId;
-          }
-          GistSyncEngine.setSyncConfig({ token: tokenVal, gistId: res.gistId });
-          showToast("Gist 创建并绑定成功！", "success");
-          updateCloudStatusUI();
-        } catch (err) {
-          showToast(`创建 Gist 失败: ${err.message}`, "error");
-        } finally {
-          btnAutoCreateGist.disabled = false;
-        }
-      }
     });
   }
 
