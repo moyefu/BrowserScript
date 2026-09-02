@@ -2509,29 +2509,268 @@ async function initApp() {
           isEmpty: true,
           records: {},
           tombstones: {},
+          custom_themes: {},
+          theme_tombstones: {},
           lastSyncTime: 0,
           rawGist: res.data
         };
       }
 
-      let contentObj = {};
-      try {
-        contentObj = JSON.parse(targetFile.content);
-      } catch (e) {
-        throw new Error("Gist 内快照数据 JSON 解析失败，格式可能已损坏");
+      let rawContent = targetFile.content;
+      // 1. 处理 GitHub Gist 大文件截断（truncated 为 true 或 content 为空）
+      if (targetFile.truncated || !rawContent) {
+        if (targetFile.raw_url) {
+          try {
+            const rawRes = await this.httpRequest({
+              method: "GET",
+              url: targetFile.raw_url,
+              headers: { "Authorization": `Bearer ${t}` }
+            });
+            rawContent = typeof rawRes.data === "string" ? rawRes.data : JSON.stringify(rawRes.data);
+          } catch (err) {
+            console.warn("[GistSync] 拉取 raw_url 失败:", err);
+          }
+        }
       }
+
+      let contentObj = null;
+      try {
+        contentObj = this.safeParseRemoteGistData(rawContent);
+      } catch (e) {
+        // 如果 targetFile.content 解析失败且未请求过 raw_url，则重试拉取 raw_url
+        if (targetFile.raw_url && !targetFile.truncated && rawContent === targetFile.content) {
+          try {
+            const rawRes = await this.httpRequest({
+              method: "GET",
+              url: targetFile.raw_url,
+              headers: { "Authorization": `Bearer ${t}` }
+            });
+            const fallbackRaw = typeof rawRes.data === "string" ? rawRes.data : JSON.stringify(rawRes.data);
+            contentObj = this.safeParseRemoteGistData(fallbackRaw);
+          } catch (retryErr) {
+            console.warn("[GistSync] 重试拉取 raw_url 仍失败:", retryErr);
+          }
+        }
+        if (!contentObj) {
+          console.warn("[GistSync] Gist 快照数据 JSON 解析失败，尝试容错分块提取:", e);
+          contentObj = this.recoverCorruptedGistJson(rawContent);
+        }
+      }
+
+      if (!contentObj || typeof contentObj !== "object") {
+        throw new Error("Gist 内快照数据格式已损坏且无法提取有效快照");
+      }
+
+      // 对远程快照单条记录做严格校验和清洗，剔除单条损坏数据
+      const { cleanMap: cleanRecords, corruptedCount: corruptedRecordCount } = this.sanitizeRecordsMap(contentObj.records);
+      const cleanTombstones = this.sanitizeTombstonesMap(contentObj.tombstones);
+      const cleanThemes = this.sanitizeThemesMap(contentObj.custom_themes);
+      const cleanThemeTombs = this.sanitizeThemeTombstonesMap(contentObj.theme_tombstones);
 
       return {
         exists: true,
         isEmpty: false,
-        records: (contentObj && typeof contentObj.records === "object") ? contentObj.records : {},
-        tombstones: (contentObj && typeof contentObj.tombstones === "object") ? contentObj.tombstones : {},
-        custom_themes: (contentObj && typeof contentObj.custom_themes === "object") ? contentObj.custom_themes : {},
-        theme_tombstones: (contentObj && typeof contentObj.theme_tombstones === "object") ? contentObj.theme_tombstones : {},
-        lastSyncTime: contentObj.lastSyncTime || 0,
+        records: cleanRecords,
+        tombstones: cleanTombstones,
+        custom_themes: cleanThemes,
+        theme_tombstones: cleanThemeTombs,
+        corruptedRecordCount: corruptedRecordCount,
+        lastSyncTime: typeof contentObj.lastSyncTime === "number" ? contentObj.lastSyncTime : 0,
         version: contentObj.version || "1.0",
         rawGist: res.data
       };
+    },
+
+    // 智能解析远端 Gist 数据，具备语法修复与容错回退
+    safeParseRemoteGistData(rawText) {
+      if (!rawText) return null;
+      if (typeof rawText === "object") return rawText;
+
+      const trimmed = String(rawText).trim();
+      // 1. 标准 JSON 解析
+      try {
+        return JSON.parse(trimmed);
+      } catch (e1) {
+        // 2. 自动剔除 BOM 头、清理多余末尾逗号
+        try {
+          const cleaned = trimmed
+            .replace(/^\uFEFF/, "")
+            .replace(/,\s*([\]}])/g, "$1");
+          return JSON.parse(cleaned);
+        } catch (e2) {
+          // 3. 容错分块扫描恢复有效记录
+          return this.recoverCorruptedGistJson(trimmed);
+        }
+      }
+    },
+
+    // 当 Gist 数据部分损坏/截断时，扫描提取所有完整的快照记录、主题和墓碑
+    recoverCorruptedGistJson(rawString) {
+      if (!rawString || typeof rawString !== "string") {
+        return { records: {}, tombstones: {}, custom_themes: {}, theme_tombstones: {}, lastSyncTime: 0 };
+      }
+
+      const recovered = {
+        format: "LSM_GIST_SYNC",
+        version: "1.4.4",
+        records: {},
+        tombstones: {},
+        custom_themes: {},
+        theme_tombstones: {},
+        lastSyncTime: 0
+      };
+
+      const syncTimeMatch = rawString.match(/"lastSyncTime"\s*:\s*(\d+)/);
+      if (syncTimeMatch) {
+        recovered.lastSyncTime = parseInt(syncTimeMatch[1], 10) || 0;
+      }
+
+      let braceDepth = 0;
+      let startIndex = -1;
+      let inString = false;
+      let escape = false;
+
+      for (let i = 0; i < rawString.length; i++) {
+        const char = rawString[i];
+
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (char === "\\") {
+          escape = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+
+        if (char === "{") {
+          if (braceDepth === 0) {
+            startIndex = i;
+          }
+          braceDepth++;
+        } else if (char === "}") {
+          braceDepth--;
+          if (braceDepth === 0 && startIndex !== -1) {
+            const block = rawString.substring(startIndex, i + 1);
+            try {
+              const obj = JSON.parse(block);
+              if (obj && typeof obj === "object") {
+                if (this.isValidRecord(obj)) {
+                  const domain = obj.domain || location.hostname || "default";
+                  if (!recovered.records[domain]) recovered.records[domain] = [];
+                  if (!recovered.records[domain].some((r) => r.id === obj.id)) {
+                    recovered.records[domain].push(obj);
+                  }
+                } else if (obj.id && obj.tokens && (obj.type === "LSM_THEME_CONFIG" || obj.name)) {
+                  recovered.custom_themes[obj.id] = obj;
+                } else if (obj.id && typeof obj.deletedAt === "number") {
+                  const domain = obj.domain || location.hostname || "default";
+                  if (!recovered.tombstones[domain]) recovered.tombstones[domain] = [];
+                  if (!recovered.tombstones[domain].some((t) => t.id === obj.id)) {
+                    recovered.tombstones[domain].push(obj);
+                  }
+                }
+              }
+            } catch (ignore) {}
+            startIndex = -1;
+          } else if (braceDepth < 0) {
+            braceDepth = 0;
+            startIndex = -1;
+          }
+        }
+      }
+
+      return recovered;
+    },
+
+    // 校验单条快照记录健康度
+    isValidRecord(rec) {
+      if (!rec || typeof rec !== "object" || Array.isArray(rec)) return false;
+      if (typeof rec.id !== "string" || !rec.id.trim()) return false;
+      if (typeof rec.name !== "string" && !rec.name) return false;
+      // 必须具备快照核心载荷特征之一
+      if (rec.cipherData === undefined && rec.summary === undefined && rec.url === undefined) return false;
+      // 若声明为加密快照，必须具备有效的密文载荷
+      if (rec.cipherData && typeof rec.cipherData === "object") {
+        if (rec.cipherData.encrypted === true) {
+          if (typeof rec.cipherData.payload !== "string" || !rec.cipherData.payload) return false;
+        }
+      }
+      return true;
+    },
+
+    // 清洗快照记录映射表，过滤损坏单条数据
+    sanitizeRecordsMap(recordsMap) {
+      const cleanMap = {};
+      let totalValid = 0;
+      let corruptedCount = 0;
+
+      if (recordsMap && typeof recordsMap === "object") {
+        for (const [domain, list] of Object.entries(recordsMap)) {
+          if (Array.isArray(list)) {
+            const cleanList = [];
+            for (const item of list) {
+              if (this.isValidRecord(item)) {
+                cleanList.push(item);
+                totalValid++;
+              } else {
+                corruptedCount++;
+                console.warn(`[GistSync] 过滤忽略损坏的单条快照数据 (域名: ${domain}):`, item);
+              }
+            }
+            if (cleanList.length > 0) {
+              cleanMap[domain] = cleanList;
+            }
+          }
+        }
+      }
+      return { cleanMap, totalValid, corruptedCount };
+    },
+
+    // 清洗快照墓碑映射表
+    sanitizeTombstonesMap(tombstonesMap) {
+      const cleanMap = {};
+      if (tombstonesMap && typeof tombstonesMap === "object") {
+        for (const [domain, list] of Object.entries(tombstonesMap)) {
+          if (Array.isArray(list)) {
+            const cleanList = list.filter(
+              (t) => t && typeof t === "object" && typeof t.id === "string" && typeof t.deletedAt === "number"
+            );
+            if (cleanList.length > 0) cleanMap[domain] = cleanList;
+          }
+        }
+      }
+      return cleanMap;
+    },
+
+    // 清洗自定义主题映射表
+    sanitizeThemesMap(themesMap) {
+      const cleanMap = {};
+      if (themesMap && typeof themesMap === "object") {
+        for (const [id, theme] of Object.entries(themesMap)) {
+          if (theme && typeof theme === "object" && theme.id) {
+            cleanMap[id] = theme;
+          }
+        }
+      }
+      return cleanMap;
+    },
+
+    // 清洗主题墓碑映射表
+    sanitizeThemeTombstonesMap(themeTombsMap) {
+      const cleanMap = {};
+      if (themeTombsMap && typeof themeTombsMap === "object") {
+        for (const [id, time] of Object.entries(themeTombsMap)) {
+          if (typeof id === "string" && typeof time === "number") {
+            cleanMap[id] = time;
+          }
+        }
+      }
+      return cleanMap;
     },
 
     async createGist(token, initialData) {
@@ -2700,10 +2939,10 @@ async function initApp() {
     },
 
     mergeSnapshotData(localData, remoteData) {
-      const localRecs = localData.records || {};
-      const remoteRecs = remoteData.records || {};
-      const localTombstones = localData.tombstones || {};
-      const remoteTombstones = remoteData.tombstones || {};
+      const { cleanMap: localRecs, corruptedCount: localCorruptedCount } = this.sanitizeRecordsMap(localData.records);
+      const { cleanMap: remoteRecs, corruptedCount: remoteCorruptedCount } = this.sanitizeRecordsMap(remoteData.records);
+      const localTombstones = this.sanitizeTombstonesMap(localData.tombstones);
+      const remoteTombstones = this.sanitizeTombstonesMap(remoteData.tombstones);
 
       const allDomains = new Set([
         ...Object.keys(localRecs),
@@ -2798,6 +3037,9 @@ async function initApp() {
         }
       }
 
+      const totalCorruptedSkipped =
+        (localCorruptedCount || 0) + (remoteCorruptedCount || 0) + (remoteData.corruptedRecordCount || 0);
+
       return {
         records: mergedRecords,
         tombstones: mergedTombstones,
@@ -2806,7 +3048,8 @@ async function initApp() {
           totalMergedCount,
           purgedByTombstoneCount,
           addedFromRemoteCount,
-          updatedCount
+          updatedCount,
+          corruptedSkippedCount: totalCorruptedSkipped
         }
       };
     },
@@ -2893,6 +3136,7 @@ async function initApp() {
           const details = [];
           if (s.addedFromRemoteCount > 0) details.push(`快照 +${s.addedFromRemoteCount}`);
           if (s.purgedByTombstoneCount > 0) details.push(`快照清理 -${s.purgedByTombstoneCount}`);
+          if (s.corruptedSkippedCount > 0) details.push(`忽略损坏快照 ${s.corruptedSkippedCount} 条`);
           if (ts.addedFromRemoteThemeCount > 0) details.push(`主题 +${ts.addedFromRemoteThemeCount}`);
           if (ts.purgedByThemeTombCount > 0) details.push(`主题清理 -${ts.purgedByThemeTombCount}`);
           if (details.length > 0) {
