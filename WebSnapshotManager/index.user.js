@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网站快照存储与恢复助手
 // @namespace    https://github.com/moyefu/BrowserScript
-// @version      1.4.4
+// @version      1.4.5
 // @description  针对指定网站实现快照（Cookie、LocalStorage、SessionStorage）的一键存储、命名、加密备份、GitHub Gist云同步、二维码生成/扫码与一键恢复
 // @author       MOYEFU
 // @icon         https://pic1.imgdb.cn/i/034D4F8VwYLLoU73kkQs3l.gif
@@ -5623,14 +5623,24 @@ async function initApp() {
       const hostKey = location.hostname;
       const cur = allPos[hostKey] || {};
 
+      // 按视口百分比存储，缩放页面时位置偏差更小
+      const vw = document.documentElement.clientWidth || window.innerWidth;
+      const vh = document.documentElement.clientHeight || window.innerHeight;
+
       const br = ball.getBoundingClientRect();
       if (br.width > 0 && br.height > 0) {
-        cur.ball = { x: Math.round(br.left), y: Math.round(br.top) };
+        cur.ball = {
+          fx: Math.round((br.left / vw) * 10000) / 10000,
+          fy: Math.round((br.top / vh) * 10000) / 10000,
+        };
       }
 
       const wr = win.getBoundingClientRect();
       if (wr.width > 0 && wr.height > 0) {
-        cur.win = { x: Math.round(wr.left), y: Math.round(wr.top) };
+        cur.win = {
+          fx: Math.round((wr.left / vw) * 10000) / 10000,
+          fy: Math.round((wr.top / vh) * 10000) / 10000,
+        };
       }
 
       allPos[hostKey] = cur;
@@ -5644,18 +5654,40 @@ async function initApp() {
       const cur = allPos[location.hostname];
       if (!cur) return;
 
-      if (cur.ball && typeof cur.ball.x === "number") {
-        const x = Math.max(10, Math.min(window.innerWidth - 60, cur.ball.x));
-        const y = Math.max(10, Math.min(window.innerHeight - 60, cur.ball.y));
+      const vw = document.documentElement.clientWidth || window.innerWidth;
+      const vh = document.documentElement.clientHeight || window.innerHeight;
+
+      const ballW = ball.offsetWidth || 50;
+      const ballH = ball.offsetHeight || 50;
+
+      if (cur.ball) {
+        // 分数存储（fx/fy 取值 0~1）；兼容旧版像素值（x/y）自动迁移为分数
+        let fx = cur.ball.fx,
+          fy = cur.ball.fy;
+        if (typeof fx !== "number" || typeof fy !== "number") {
+          fx = Math.max(0, cur.ball.x || 0) / vw;
+          fy = Math.max(0, cur.ball.y || 0) / vh;
+        }
+        const x = Math.max(10, Math.min(vw - ballW - 10, fx * vw));
+        const y = Math.max(10, Math.min(vh - ballH - 10, fy * vh));
         ball.style.left = x + "px";
         ball.style.top = y + "px";
         ball.style.right = "auto";
         ball.style.bottom = "auto";
       }
 
-      if (cur.win && typeof cur.win.x === "number") {
-        const x = Math.max(10, Math.min(window.innerWidth - 490, cur.win.x));
-        const y = Math.max(10, Math.min(window.innerHeight - 530, cur.win.y));
+      const winW = win.offsetWidth || 480;
+      const winH = win.offsetHeight || 520;
+
+      if (cur.win) {
+        let fx = cur.win.fx,
+          fy = cur.win.fy;
+        if (typeof fx !== "number" || typeof fy !== "number") {
+          fx = Math.max(0, cur.win.x || 0) / vw;
+          fy = Math.max(0, cur.win.y || 0) / vh;
+        }
+        const x = Math.max(10, Math.min(Math.max(10, vw - winW - 10), fx * vw));
+        const y = Math.max(10, Math.min(Math.max(10, vh - winH - 10), fy * vh));
         win.style.left = x + "px";
         win.style.top = y + "px";
         win.style.right = "auto";
@@ -8229,26 +8261,30 @@ async function initApp() {
   restoreUIPos();
   refreshList();
 
-  // 视口 Resize 时防止悬浮球和管理窗口溢出屏幕
+  // 视口 Resize 时按视口分数重新计算位置，防止悬浮球和管理窗口溢出屏幕
   window.addEventListener("resize", () => {
     try {
       if (ball && ball.style.display !== "none" && !ball.classList.contains("hidden")) {
         const br = ball.getBoundingClientRect();
-        if (br.left + br.width > window.innerWidth || br.top + br.height > window.innerHeight) {
-          const maxLeft = Math.max(10, window.innerWidth - (ball.offsetWidth || 50) - 12);
-          const maxTop = Math.max(10, window.innerHeight - (ball.offsetHeight || 50) - 12);
-          ball.style.left = Math.min(br.left, maxLeft) + "px";
-          ball.style.top = Math.min(br.top, maxTop) + "px";
-        }
+        const vw = document.documentElement.clientWidth || window.innerWidth;
+        const vh = document.documentElement.clientHeight || window.innerHeight;
+        const allPos = getUIPositions();
+        const saved = allPos[location.hostname];
+        const fx = saved && typeof saved.ball.fx === "number" ? saved.ball.fx : br.left / vw;
+        const fy = saved && typeof saved.ball.fy === "number" ? saved.ball.fy : br.top / vh;
+        ball.style.left = Math.max(10, Math.min(vw - (ball.offsetWidth || 50) - 10, fx * vw)) + "px";
+        ball.style.top = Math.max(10, Math.min(vh - (ball.offsetHeight || 50) - 10, fy * vh)) + "px";
       }
       if (win && win.style.display !== "none" && !win.classList.contains("hidden")) {
         const wr = win.getBoundingClientRect();
-        if (wr.left + wr.width > window.innerWidth || wr.top + wr.height > window.innerHeight) {
-          const maxLeft = Math.max(10, window.innerWidth - (win.offsetWidth || 480) - 20);
-          const maxTop = Math.max(10, window.innerHeight - (win.offsetHeight || 520) - 20);
-          win.style.left = Math.min(wr.left, maxLeft) + "px";
-          win.style.top = Math.min(wr.top, maxTop) + "px";
-        }
+        const vw = document.documentElement.clientWidth || window.innerWidth;
+        const vh = document.documentElement.clientHeight || window.innerHeight;
+        const allPos = getUIPositions();
+        const saved = allPos[location.hostname];
+        const fx = saved && typeof saved.win.fx === "number" ? saved.win.fx : wr.left / vw;
+        const fy = saved && typeof saved.win.fy === "number" ? saved.win.fy : wr.top / vh;
+        win.style.left = Math.max(10, Math.min(Math.max(10, vw - (win.offsetWidth || 480) - 10), fx * vw)) + "px";
+        win.style.top = Math.max(10, Math.min(Math.max(10, vh - (win.offsetHeight || 520) - 10), fy * vh)) + "px";
       }
     } catch {}
   });
