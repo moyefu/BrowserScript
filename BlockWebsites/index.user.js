@@ -10,6 +10,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @tag          MYF
+// @run-at       document-start
 // @noframes
 // ==/UserScript==
 
