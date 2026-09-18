@@ -15,6 +15,8 @@
 // @run-at       document-idle
 // @icon         https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=25&letterSpacing=1&duration=500&pause=500&color=F7009F&background=00D7FF00&vCenter=true&random=true&width=28&height=28&lines=AI
 // @noframes
+// @updateURL    https://github.com/moyefu/BrowserScript/releases/download/AiAgent-latest/AiAgent.min.user.js
+// @downloadURL  https://github.com/moyefu/BrowserScript/releases/download/AiAgent-latest/AiAgent.min.user.js
 // ==/UserScript==
 
 /* ==UserConfig==

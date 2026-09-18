@@ -71,10 +71,21 @@ async function main() {
     fs.mkdirSync(DIST_DIR, { recursive: true });
   }
 
+  const targetArg = process.argv[2]?.trim();
+
   const entries = fs.readdirSync(ROOT_DIR, { withFileTypes: true });
-  const projectDirs = entries
+  let projectDirs = entries
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !IGNORED_DIRS.has(entry.name))
     .map((entry) => entry.name);
+
+  if (targetArg && targetArg !== 'all') {
+    if (!projectDirs.includes(targetArg)) {
+      console.error(`❌ 未找到指定的子项目: "${targetArg}"。可选项目: ${projectDirs.join(', ')}`);
+      process.exit(1);
+    }
+    projectDirs = [targetArg];
+    console.log(`🎯 指定构建单项目: [${targetArg}]\n`);
+  }
 
   const results = [];
 

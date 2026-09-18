@@ -7,8 +7,10 @@
 // @match        *cpa.local/moyefu*
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @tag          MYF
+// @tag          MOYEFU
 // @noframes
+// @updateURL    https://github.com/moyefu/BrowserScript/releases/download/CpaToGrok2Api-latest/CpaToGrok2Api.min.user.js
+// @downloadURL  https://github.com/moyefu/BrowserScript/releases/download/CpaToGrok2Api-latest/CpaToGrok2Api.min.user.js
 // ==/UserScript==
 
 /* ==UserConfig==

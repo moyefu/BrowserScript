@@ -11,9 +11,11 @@
 // @grant        GM_addValueChangeListener
 // @grant        GM_removeValueChangeListener
 // @grant        unsafeWindow
-// @tag          MYF
+// @tag          MOYEFU
 // @run-at       document-start
 // @noframes
+// @updateURL    https://github.com/moyefu/BrowserScript/releases/download/TabLimit-latest/TabLimit.min.user.js
+// @downloadURL  https://github.com/moyefu/BrowserScript/releases/download/TabLimit-latest/TabLimit.min.user.js
 // ==/UserScript==
 
 /* ==UserConfig==

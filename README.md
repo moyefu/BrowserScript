@@ -20,13 +20,13 @@
 
 ## 📦 脚本列表与速览 (Scripts Directory)
 
-| 目录 / 脚本名称 | 当前版本 | 适用环境 | 核心功能速览 | 详细文档 |
-| :--- | :--- | :--- | :--- | :--- |
-| [**WebSnapshotManager**](./WebSnapshotManager) <br> **网站快照存储与恢复助手** | `v1.5.0` | 通用全站 | Cookie（全量/HttpOnly/标准化消除带点差异）、LocalStorage、SessionStorage 一键捕获与精准还原；动态合成 URL 彻底清空与可选范围抽屉；原生 CompressionStream 透明无损压缩（体积直降 90%）；AES-GCM 硬件级加密与 Trusted Types 严格 CSP 兼容；GitHub Gist 高容错容灾云同步与防打扰空闲自动同步；二维码分片轮播与扫码识别；非目标站点 0 开销静默运行。 | [查看文档](./WebSnapshotManager/README.md) |
-| [**AiAgent**](./AiAgent) <br> **ScriptCat Agent 悬浮聊天窗** | `v1.15.0` | **ScriptCat Beta** *(必须)* | 悬浮球式可拖拽 AI 聊天窗；ScriptCat 原生 Agent API 驱动（需 Beta 版）；流式对话、模型切换、多会话管理与白名单站点控制。 | [查看文档](./AiAgent/README.md) |
-| [**CpaToGrok2Api**](./CpaToGrok2Api) <br> **Grok CPA 转 Grok2Api Json** | `v0.1.0` | CPA 站点 | 自动感知 CPA 登录状态；实时并发检测 xAI 账号额度；纯前端原生解析 JWT Payload；一键转换并批量导出标准 Grok2Api JSON。 | [查看文档](./CpaToGrok2Api/README.md) |
-| [**BlockWebsites**](./BlockWebsites) <br> **禁止打开的网页 (防沉迷)** | `v0.4.0` | 通用全站 | 灵活的网址通配符匹配；支持 `(HH-HH)`、`(HH:MM-HH:MM)`、`(HH:MM:SS-HH:MM:SS)` 多精度时间段限制；秒级自动关闭网页与降级拦截屏。 | [查看文档](./BlockWebsites/README.md) |
-| [**TabLimit**](./TabLimit) <br> **标签数量限制** | `v0.2.0` | 通用全站 | 按规则维护标签登记表；支持 `new` / `old` 双模式保留策略；`new` 模式 `setInterval` 持续监听，`old` 模式打开时一次判定；超出上限的标签自动关闭。 | [查看文档](./TabLimit/README.md) |
+| 目录 / 脚本名称 | 当前版本 | 适用环境 | 核心功能速览 | 永久最新安装链接 | 详细文档 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| [**WebSnapshotManager**](./WebSnapshotManager) <br> **网站快照存储与恢复助手** | `v1.5.0` | 通用全站 | Cookie（全量/HttpOnly/标准化消除带点差异）、LocalStorage、SessionStorage 一键捕获与精准还原；原生 CompressionStream 压缩；AES-GCM 加密；GitHub Gist 云同步；二维码分片传输。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/WebSnapshotManager-latest/WebSnapshotManager.min.user.js) | [查看文档](./WebSnapshotManager/README.md) |
+| [**AiAgent**](./AiAgent) <br> **ScriptCat Agent 悬浮聊天窗** | `v1.15.0` | **ScriptCat Beta** *(必须)* | 悬浮球式可拖拽 AI 聊天窗；ScriptCat 原生 Agent API 驱动（需 Beta 版）；流式对话、模型切换、多会话管理与白名单站点控制。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/AiAgent-latest/AiAgent.min.user.js) | [查看文档](./AiAgent/README.md) |
+| [**CpaToGrok2Api**](./CpaToGrok2Api) <br> **Grok CPA 转 Grok2Api Json** | `v0.1.0` | CPA 站点 | 自动感知 CPA 登录状态；实时并发检测 xAI 账号额度；纯前端原生解析 JWT Payload；一键转换并批量导出标准 Grok2Api JSON。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/CpaToGrok2Api-latest/CpaToGrok2Api.min.user.js) | [查看文档](./CpaToGrok2Api/README.md) |
+| [**BlockWebsites**](./BlockWebsites) <br> **禁止打开的网页 (防沉迷)** | `v0.4.0` | 通用全站 | 灵活的网址通配符匹配；支持 `(HH-HH)`、`(HH:MM-HH:MM)`、`(HH:MM:SS-HH:MM:SS)` 多精度时间段限制；秒级自动关闭网页与降级拦截屏。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/BlockWebsites-latest/BlockWebsites.min.user.js) | [查看文档](./BlockWebsites/README.md) |
+| [**TabLimit**](./TabLimit) <br> **标签数量限制** | `v0.5.1` | 通用全站 | 按规则维护标签登记表；支持 `new` / `old` 双模式保留策略；BroadcastChannel + localStorage + GM 三通道高并发探活，超出上限自动关闭。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/TabLimit-latest/TabLimit.min.user.js) | [查看文档](./TabLimit/README.md) |
 
 ---
 
@@ -42,8 +42,8 @@
 - [Tampermonkey (油猴)](https://www.tampermonkey.net/) *(支持除 AiAgent 外的大多数通用脚本)*
 
 ### 2. 导入与运行
-- **方式一：通过 GitHub Releases 一键安装（推荐）**  
-  前往 [Releases 页面](https://github.com/moyefu/BrowserScript/releases)，直接点击各项目的 `.min.user.js`（如 `AiAgent.min.user.js`、`WebSnapshotManager.min.user.js`），油猴/脚本猫插件将自动弹出安装界面，点击确认即可一键安装。
+- **方式一：通过永久链接一键安装（推荐）**  
+  点击上方列表中各脚本的 **[⚡ 一键安装 (min)]** 链接，油猴/脚本猫插件将自动弹出安装界面，点击确认即可一键安装。脚本内已配置 `@updateURL`，后续将自动静默检测更新！
 - **方式二：手动复制源码**  
   1. 打开扩展管理器的 **「管理面板」** -> **「新建脚本 / 添加脚本」**。
   2. 进入对应子项目目录，复制 `index.user.js` 的完整代码。
@@ -52,28 +52,37 @@
 
 ---
 
-## 🛠️ 本地构建与自动发布 (Build & Release)
+## 🛠️ 本地构建与独立发布 (Build & Release)
+
+本项目采用**按子项目独立版本发布**模式，各脚本维护自身独立的版本周期，互不牵连。
 
 ### 1. 本地打包与压缩
-本项目根目录提供统一构建工具，能自动扫描所有子项目、保留油猴元数据头并使用 Terser 深度压缩：
 ```bash
 # 安装依赖
 npm install
 
-# 扫描并压缩所有子项目的 index.user.js
+# 仅打包压缩单个子项目（例如仅构建 TabLimit）
+node scripts/build.js TabLimit
+
+# 或全量打包压缩所有子项目
 npm run build
 ```
 压缩产物将集中输出至 `dist/<项目名>.min.user.js`（体积减小约 30% ~ 55%）。
 
-### 2. GitHub 自动化发布
+### 2. GitHub 自动化独立发布
 仓库已配置 GitHub Actions 自动化工作流（`.github/workflows/release.yml`）：
-- **推送 Tag 自动发布**：
+- **推送子项目专属 Tag 自动发布**：
+  格式规范为 `<项目名>-v<版本号>`：
   ```bash
-  git tag v1.0.0
-  git push origin v1.0.0
+  # 示例：仅为 TabLimit 发布 v0.5.1
+  git tag TabLimit-v0.5.1
+  git push origin TabLimit-v0.5.1
   ```
-  GitHub Actions 将自动执行全量构建、压缩脚本并生成对应的 GitHub Release 附件供一键安装。
-- **网页手动发布**：可在 GitHub 仓库的 **Actions** -> **Release UserScripts** 页面点击 **Run workflow** 手动触发。
+  GitHub Actions 将**仅构建并发布该子项目**：
+  1. 自动生成专属 Release（如 `TabLimit v0.5.1`），仅上传该项目的附件；
+  2. 自动更新滚动 Release（如 `TabLimit-latest`），确保永久下载链接永不失效。
+- **网页手动发布**：
+  可在 GitHub 仓库的 **Actions** -> **Release UserScripts** 页面点击 **Run workflow**，在下拉菜单中直接选择要发布的子项目。
 
 ---
 

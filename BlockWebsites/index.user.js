@@ -9,9 +9,11 @@
 // @icon         https://image.maxemblem.com/maxemblem/uploads_file/20260730/10f0a1bbc4a6c391b2289facb2106e2f.svg
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @tag          MYF
+// @tag          MOYEFU
 // @run-at       document-start
 // @noframes
+// @updateURL    https://github.com/moyefu/BrowserScript/releases/download/BlockWebsites-latest/BlockWebsites.min.user.js
+// @downloadURL  https://github.com/moyefu/BrowserScript/releases/download/BlockWebsites-latest/BlockWebsites.min.user.js
 // ==/UserScript==
 
 /* ==UserConfig==

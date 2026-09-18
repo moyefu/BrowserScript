@@ -23,6 +23,8 @@
 // @tag          MOYEFU
 // @run-at       document-idle
 // @noframes
+// @updateURL    https://scriptcat.org/scripts/code/7633/网站快照存储与恢复助手.user.js
+// @downloadURL  https://scriptcat.org/scripts/code/7633/网站快照存储与恢复助手.user.js
 // ==/UserScript==
 
 /* ==UserConfig==

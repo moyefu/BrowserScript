@@ -3,11 +3,24 @@ name: Release UserScripts
 on:
   push:
     tags:
+      - '*-v*'
       - 'v*'
   workflow_dispatch:
     inputs:
-      tag_name:
-        description: '发布版本号（Tag，例如 v1.0.0，留空则自动按日期生成）'
+      project:
+        description: '选择要发布的子项目'
+        type: choice
+        required: true
+        default: 'TabLimit'
+        options:
+          - 'TabLimit'
+          - 'AiAgent'
+          - 'BlockWebsites'
+          - 'CpaToGrok2Api'
+          - 'WebSnapshotManager'
+          - 'all'
+      custom_version:
+        description: '自定义版本号（例如 0.5.1，留空则自动从源码 @version 读取）'
         required: false
         default: ''
 
@@ -33,32 +46,91 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and minify userscripts
-        run: npm run build
-
-      - name: Determine Release Tag
-        id: release_info
+      - name: Resolve Project & Version
+        id: target_info
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag_name }}"
-            if [ -z "$TAG" ]; then
-              TAG="v$(date +'%Y.%m.%d-%H%M')"
+            PROJECT="${{ github.event.inputs.project }}"
+            CUSTOM_VER="${{ github.event.inputs.custom_version }}"
+
+            if [ "$PROJECT" = "all" ]; then
+              VERSION="${CUSTOM_VER:-$(date +'%Y.%m.%d-%H%M')}"
+              TAG="v$VERSION"
+              RELEASE_NAME="All Scripts v$VERSION"
+              IS_SINGLE="false"
+            else
+              if [ -z "$CUSTOM_VER" ]; then
+                # 从对应子项目的 index.user.js 提取 @version
+                SCRIPT_FILE="$PROJECT/index.user.js"
+                VER=$(grep -E '^\s*//\s*@version\s+' "$SCRIPT_FILE" | head -n 1 | awk '{print $3}' | tr -d '\r')
+                VERSION="${VER:-1.0.0}"
+              else
+                VERSION="$CUSTOM_VER"
+              fi
+              TAG="$PROJECT-v$VERSION"
+              RELEASE_NAME="$PROJECT v$VERSION"
+              IS_SINGLE="true"
             fi
-            echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
-            echo "release_name=Release $TAG" >> "$GITHUB_OUTPUT"
           else
-            echo "tag_name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-            echo "release_name=Release ${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            # Tag Push 事件
+            TAG="${{ github.ref_name }}"
+            if [[ "$TAG" == *-v* ]]; then
+              PROJECT="${TAG%%-v*}"
+              VERSION="${TAG#*-v}"
+              RELEASE_NAME="$PROJECT v$VERSION"
+              IS_SINGLE="true"
+            else
+              PROJECT="all"
+              VERSION="${TAG#v}"
+              RELEASE_NAME="Release $TAG"
+              IS_SINGLE="false"
+            fi
           fi
 
-      - name: Create GitHub Release and upload assets
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+          echo "is_single=$IS_SINGLE" >> "$GITHUB_OUTPUT"
+
+      - name: Build and minify script(s)
+        id: build
+        run: |
+          if [ "${{ steps.target_info.outputs.is_single }}" = "true" ]; then
+            node scripts/build.js "${{ steps.target_info.outputs.project }}"
+            echo "files=dist/${{ steps.target_info.outputs.project }}.min.user.js" >> "$GITHUB_OUTPUT"
+          else
+            npm run build
+            echo "files=dist/*.min.user.js" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Versioned GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_info.outputs.tag_name }}
-          name: ${{ steps.release_info.outputs.release_name }}
-          files: dist/*.min.user.js
+          tag_name: ${{ steps.target_info.outputs.tag_name }}
+          name: ${{ steps.target_info.outputs.release_name }}
+          files: ${{ steps.build.outputs.files }}
           generate_release_notes: true
           draft: false
           prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Rolling Latest Release
+        if: steps.target_info.outputs.is_single == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.target_info.outputs.project }}-latest
+          name: ${{ steps.target_info.outputs.project }} (Latest)
+          files: dist/${{ steps.target_info.outputs.project }}.min.user.js
+          draft: false
+          prerelease: false
+          make_latest: false
+          body: |
+            ## 🚀 ${{ steps.target_info.outputs.project }} 最新发布
+
+            - **版本**: `${{ steps.target_info.outputs.version }}`
+            - **永久下载/更新链接**: `https://github.com/${{ github.repository }}/releases/download/${{ steps.target_info.outputs.project }}-latest/${{ steps.target_info.outputs.project }}.min.user.js`
+            - **版本归档**: [`${{ steps.target_info.outputs.tag_name }}`](https://github.com/${{ github.repository }}/releases/tag/${{ steps.target_info.outputs.tag_name }})
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
