@@ -42,10 +42,38 @@
 - [Tampermonkey (油猴)](https://www.tampermonkey.net/) *(支持除 AiAgent 外的大多数通用脚本)*
 
 ### 2. 导入与运行
-1. 打开扩展管理器的 **「管理面板」** -> **「新建脚本 / 添加脚本」**。
-2. 进入对应脚本目录，复制 `index.user.js` 的完整代码。
-3. 粘贴至编辑器中并保存，脚本即可随匹配网页自动加载运行。
-4. 如需自定义参数，可在扩展管理器的「设置 / 用户配置」面板中修改。
+- **方式一：通过 GitHub Releases 一键安装（推荐）**  
+  前往 [Releases 页面](https://github.com/moyefu/BrowserScript/releases)，直接点击各项目的 `.min.user.js`（如 `AiAgent.min.user.js`、`WebSnapshotManager.min.user.js`），油猴/脚本猫插件将自动弹出安装界面，点击确认即可一键安装。
+- **方式二：手动复制源码**  
+  1. 打开扩展管理器的 **「管理面板」** -> **「新建脚本 / 添加脚本」**。
+  2. 进入对应子项目目录，复制 `index.user.js` 的完整代码。
+  3. 粘贴至编辑器中并保存，脚本即可随匹配网页自动加载运行。
+  4. 如需自定义参数，可在扩展管理器的「设置 / 用户配置」面板中修改。
+
+---
+
+## 🛠️ 本地构建与自动发布 (Build & Release)
+
+### 1. 本地打包与压缩
+本项目根目录提供统一构建工具，能自动扫描所有子项目、保留油猴元数据头并使用 Terser 深度压缩：
+```bash
+# 安装依赖
+npm install
+
+# 扫描并压缩所有子项目的 index.user.js
+npm run build
+```
+压缩产物将集中输出至 `dist/<项目名>.min.user.js`（体积减小约 30% ~ 55%）。
+
+### 2. GitHub 自动化发布
+仓库已配置 GitHub Actions 自动化工作流（`.github/workflows/release.yml`）：
+- **推送 Tag 自动发布**：
+  ```bash
+  git tag v1.0.0
+  git push origin v1.0.0
+  ```
+  GitHub Actions 将自动执行全量构建、压缩脚本并生成对应的 GitHub Release 附件供一键安装。
+- **网页手动发布**：可在 GitHub 仓库的 **Actions** -> **Release UserScripts** 页面点击 **Run workflow** 手动触发。
 
 ---
 
@@ -53,40 +81,45 @@
 
 ```text
 .
-├── README.md                     # 项目主仓库说明文档
-├── AiAgent/                      # ScriptCat Agent 悬浮聊天窗
-│   ├── index.user.js        # 脚本源码
-│   ├── README.md                 # 详细特性与使用说明
-│   └── UPDATE.md                 # 版本更新日志
-├── BlockWebsites/                # 禁止打开的网页（防沉迷与时间段限制）
-│   ├── index.user.js        # 脚本源码
-│   ├── README.md                 # 规则语法与时间段配置说明
-│   └── UPDATE.md                 # 版本更新日志
-├── CpaToGrok2Api/                # Grok CPA 转 Grok2Api Json
-│   ├── index.user.js        # 脚本源码
-│   ├── README.md                 # API 调用、JWT 转换与导出说明
-│   └── UPDATE.md                 # 版本更新日志
-├── TabLimit/                     # 标签数量限制
-│   ├── index.user.js        # 脚本源码
-│   ├── README.md                 # 规则语法与保留策略说明
-│   └── UPDATE.md                 # 版本更新日志
-└── WebSnapshotManager/           # 网站快照存储与恢复助手
-    ├── src/                      # 模块化工程源码
-    │   ├── meta.js               # 脚本元数据头、UserConfig 配置与 CSP Trusted Types 策略
-    │   ├── theme.js              # ThemeEngine 主题系统与官方/自定义主题导入导出
-    │   ├── compress.js           # CompressionEngine 原生 CompressionStream 无损压缩引擎
-    │   ├── crypto.js             # CryptoEngine AES-GCM 256 位加密与多版本密钥派生
-    │   ├── session.js            # SessionManager Cookie 标准化采集/恢复分流/精准合成 URL 彻底清除
-    │   ├── db.js                 # DB 多域名快照存储、版本控制与墓碑防复活机制
-    │   ├── gist.js               # GistSyncEngine GitHub Gist 双向云同步与防打扰空闲监听
-    │   ├── ui.js                 # LSM_UI 界面、悬浮球、设置窗口、主题编辑器、分片 QR 码
-    │   └── main.js               # 域名白名单/黑名单短路拦截、菜单命令与生命周期启动器
-    ├── build.js                  # 零依赖一键打包构建脚本 (node build.js)
-    ├── package.json              # 极速打包构建配置 (npm run build)
-    ├── index.user.js             # 构建生成的单文件发布脚本 (8500+ 行)
-    ├── logo.gif                  # 标志图
-    ├── README.md                 # 安全加密、存储与恢复指南
-    └── UPDATE.md                 # 版本更新日志
+├── .github/workflows/           # GitHub Actions 自动化工作流
+│   └── release.yml              # Tag 触发与一键压缩发布 Release 工作流
+├── scripts/                      # 仓库级构建脚本
+│   └── build.js                 # 自动扫描并使用 Terser 压缩各项目脚本
+├── package.json                 # 根目录依赖与构建脚本配置
+├── README.md                    # 项目主仓库说明文档
+├── AiAgent/                     # ScriptCat Agent 悬浮聊天窗
+│   ├── index.user.js            # 脚本源码
+│   ├── README.md                # 详细特性与使用说明
+│   └── UPDATE.md                # 版本更新日志
+├── BlockWebsites/               # 禁止打开的网页（防沉迷与时间段限制）
+│   ├── index.user.js            # 脚本源码
+│   ├── README.md                # 规则语法与时间段配置说明
+│   └── UPDATE.md                # 版本更新日志
+├── CpaToGrok2Api/               # Grok CPA 转 Grok2Api Json
+│   ├── index.user.js            # 脚本源码
+│   ├── README.md                # API 调用、JWT 转换与导出说明
+│   └── UPDATE.md                # 版本更新日志
+├── TabLimit/                    # 标签数量限制
+│   ├── index.user.js            # 脚本源码
+│   ├── README.md                # 规则语法与保留策略说明
+│   └── UPDATE.md                # 版本更新日志
+└── WebSnapshotManager/          # 网站快照存储与恢复助手
+    ├── src/                     # 模块化工程源码
+    │   ├── meta.js              # 脚本元数据头、UserConfig 配置与 CSP Trusted Types 策略
+    │   ├── theme.js             # ThemeEngine 主题系统与官方/自定义主题导入导出
+    │   ├── compress.js          # CompressionEngine 原生 CompressionStream 无损压缩引擎
+    │   ├── crypto.js            # CryptoEngine AES-GCM 256 位加密与多版本密钥派生
+    │   ├── session.js           # SessionManager Cookie 标准化采集/恢复分流/精准合成 URL 彻底清除
+    │   ├── db.js                # DB 多域名快照存储、版本控制与墓碑防复活机制
+    │   ├── gist.js              # GistSyncEngine GitHub Gist 双向云同步与防打扰空闲监听
+    │   ├── ui.js                # LSM_UI 界面、悬浮球、设置窗口、主题编辑器、分片 QR 码
+    │   └── main.js              # 域名白名单/黑名单短路拦截、菜单命令与生命周期启动器
+    ├── build.js                 # 零依赖一键打包构建脚本 (node build.js)
+    ├── package.json             # 极速打包构建配置 (npm run build)
+    ├── index.user.js            # 构建生成的单文件发布脚本 (8500+ 行)
+    ├── logo.gif                 # 标志图
+    ├── README.md                # 安全加密、存储与恢复指南
+    └── UPDATE.md                # 版本更新日志
 ```
 
 ---

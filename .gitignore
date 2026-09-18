@@ -1,2 +1,6 @@
 .*/
+!.github/
+!.github/**
 test/
+dist/
+node_modules/

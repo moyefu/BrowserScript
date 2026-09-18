@@ -1,0 +1,14 @@
+{
+  "name": "browser-scripts",
+  "version": "1.0.0",
+  "description": "Browser UserScripts collection with automated minification and release",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.js"
+  },
+  "devDependencies": {
+    "terser": "^5.39.0"
+  },
+  "author": "MOYEFU",
+  "license": "MIT"
+}
