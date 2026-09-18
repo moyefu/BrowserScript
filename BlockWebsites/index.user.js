@@ -20,7 +20,10 @@ Config:
     title: 要禁止打开的网站 (多个用换行区分)
     description: 每行一条，支持通配符 * ；可附加时间段 (HH-HH) / (HH:MM-HH:MM) / (HH:MM:SS-HH:MM:SS)，如 https://example.com (12-18) 表示 12:00:00 到 18:59:59 之间打开自动关闭，不带时间段则打开即关闭
     type: textarea
-    default: https://*adblockplus.org (12:00:00-23:59:59)
+    default: |
+        https://*adblockplus.org (12:00:00-23:59:59)
+        https://*adblockplus.org (12-18)
+        https://*adblockplus.org (12:00-18:00)
 
 ==/UserConfig== */
 
