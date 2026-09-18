@@ -4,6 +4,47 @@
 
 ---
 
+## [1.5.0] - 2026-09-18
+
+### 🍪 Cookie 跨浏览器一致性与精准清理重构
+- **根因彻底修复：抹平跨浏览器 `.` 带点与不带点差异**：
+  - Chromium 底层严格区分 Host-Only Cookie（`hostOnly: true`，无前导点）与 Domain Cookie（`hostOnly: false`，带前导点 `.domain`）；
+  - 修复 `restoreSession` 盲目传递 `domain` 导致 Host-Only Cookie 被污染为带点 Domain Cookie 的缺陷；
+  - 引入「标准化元数据方案」：捕获时精确记录 `hostOnly`、`partitionKey`（CHIPS 分区 Cookie）、`sameSite`，并将 `domain` 规范化为无前导点的标准域名；
+  - 恢复时严格分流：Host-Only Cookie 绝不传 `domain`，依赖 URL 绑定为纯粹的主机 Cookie；Domain Cookie 规范传参保持子域共享，完美抹平 Chrome/Edge/Firefox/ScriptCat/Tampermonkey 差异；
+  - 读时向下兼容历史快照：自动推断旧数据格式并平滑兼容升级。
+- **精准动态合成 URL 清除引擎：彻底解决带点与特定路径 Cookie 清理残留**：
+  - 针对每一个待删除的 Cookie，根据其 `secure`、`cleanDomain`、`path` 动态合成绝对精准的目标匹配 URL，解决 Tampermonkey/Chromium `chrome.cookies.remove` 因 URL 路径/协议不匹配而静默拒绝删除的问题；
+  - 清除阶段父域查询剥离前导点，解决 Chromium 传入带点 domain 导致子域搜索失效的问题；
+  - 交互式清除作用域弹窗：点击“清空当前网站快照数据”弹出范围选择抽屉，默认「彻底清理生效域」（同时清理父级带点泛域，确保彻底退出登录态），支持勾选「仅清理当前精准子域名」。
+
+### ⚡ 全局运行性能与非目标站点极致静默
+- **非目标站点 0 开销静默**：
+  - 白名单模式未命中或黑名单模式命中时，入口立即短路 `return`；
+  - 取消全局非激活环境的 `Element.prototype.innerHTML` 原型链劫持，避免 SPA 框架（Vue/React）兼容性干扰与全网页性能损耗；
+  - 延迟初始化：仅保留轻量油猴菜单，只有当用户从菜单临时/永久激活插件时才按需挂载。
+
+### 🗜️ 存储与 Gist 数据原生无损压缩 (CompressionStream)
+- **基于原生 CompressionStream 的透明无损压缩**：
+  - 引入 `CompressionEngine`，利用现代浏览器原生内置的 `CompressionStream('deflate-raw')`；
+  - 当快照体积超过 4KB 时透明无损压缩并 Base64 编码，快照存储体积缩减 70%~90%，彻底解除油猴本地存储上限与 Gist 同步大文件限制。
+
+### 🏗️ 零依赖源码模块化工程化与极简构建
+- **源码解耦拆分至 `src/` 目录**：
+  - `meta.js`: UserScript 头、UserConfig 与 Trusted Types 策略
+  - `theme.js`: ThemeEngine 主题引擎与预设
+  - `compress.js`: CompressionEngine 原生压缩解压引擎
+  - `crypto.js`: CryptoEngine AES-GCM 256 加密与多版本回退解密
+  - `session.js`: SessionManager 会话与 Cookie 捕获/恢复/精准清除
+  - `db.js`: DB 多域名快照存储与墓碑同步
+  - `gist.js`: GistSyncEngine GitHub Gist 云同步
+  - `ui.js`: LSM_UI 悬浮球、设置窗口、主题编辑器、分片 QR 码
+  - `main.js`: 站点过滤短路拦截与生命周期启动器
+- **极简零依赖构建**：
+  - 根目录提供 `build.js`，运行 `node build.js` 或 `npm run build` 8ms 极速完成合并打包与语法校验，生成单文件 `index.user.js`。
+
+---
+
 ## [1.4.5] - 2026-09-10
 
 ### 📍 悬浮球 / 管理窗口视口百分比位置记忆

@@ -22,7 +22,7 @@
 
 | 目录 / 脚本名称 | 当前版本 | 适用环境 | 核心功能速览 | 详细文档 |
 | :--- | :--- | :--- | :--- | :--- |
-| [**WebSnapshotManager**](./WebSnapshotManager) <br> **网站快照存储与恢复助手** | `v1.4.5` | 通用全站 | Cookie（全量/HttpOnly）、LocalStorage、SessionStorage 一键捕获；AES-GCM 硬件级加密与 Trusted Types 严格 CSP 兼容；GitHub Gist 高容错容灾云同步与防打扰空闲自动同步；二维码生成展示/分片轮播/扫码识别恢复；多账号极速切换与跨设备导入导出。 | [查看文档](./WebSnapshotManager/README.md) |
+| [**WebSnapshotManager**](./WebSnapshotManager) <br> **网站快照存储与恢复助手** | `v1.5.0` | 通用全站 | Cookie（全量/HttpOnly/标准化消除带点差异）、LocalStorage、SessionStorage 一键捕获与精准还原；动态合成 URL 彻底清空与可选范围抽屉；原生 CompressionStream 透明无损压缩（体积直降 90%）；AES-GCM 硬件级加密与 Trusted Types 严格 CSP 兼容；GitHub Gist 高容错容灾云同步与防打扰空闲自动同步；二维码分片轮播与扫码识别；非目标站点 0 开销静默运行。 | [查看文档](./WebSnapshotManager/README.md) |
 | [**AiAgent**](./AiAgent) <br> **ScriptCat Agent 悬浮聊天窗** | `v1.15.0` | **ScriptCat Beta** *(必须)* | 悬浮球式可拖拽 AI 聊天窗；ScriptCat 原生 Agent API 驱动（需 Beta 版）；流式对话、模型切换、多会话管理与白名单站点控制。 | [查看文档](./AiAgent/README.md) |
 | [**CpaToGrok2Api**](./CpaToGrok2Api) <br> **Grok CPA 转 Grok2Api Json** | `v0.1.0` | CPA 站点 | 自动感知 CPA 登录状态；实时并发检测 xAI 账号额度；纯前端原生解析 JWT Payload；一键转换并批量导出标准 Grok2Api JSON。 | [查看文档](./CpaToGrok2Api/README.md) |
 | [**BlockWebsites**](./BlockWebsites) <br> **禁止打开的网页 (防沉迷)** | `v0.4.0` | 通用全站 | 灵活的网址通配符匹配；支持 `(HH-HH)`、`(HH:MM-HH:MM)`、`(HH:MM:SS-HH:MM:SS)` 多精度时间段限制；秒级自动关闭网页与降级拦截屏。 | [查看文档](./BlockWebsites/README.md) |
@@ -71,7 +71,19 @@
 │   ├── README.md                 # 规则语法与保留策略说明
 │   └── UPDATE.md                 # 版本更新日志
 └── WebSnapshotManager/           # 网站快照存储与恢复助手
-    ├── index.user.js        # 脚本源码
+    ├── src/                      # 模块化工程源码
+    │   ├── meta.js               # 脚本元数据头、UserConfig 配置与 CSP Trusted Types 策略
+    │   ├── theme.js              # ThemeEngine 主题系统与官方/自定义主题导入导出
+    │   ├── compress.js           # CompressionEngine 原生 CompressionStream 无损压缩引擎
+    │   ├── crypto.js             # CryptoEngine AES-GCM 256 位加密与多版本密钥派生
+    │   ├── session.js            # SessionManager Cookie 标准化采集/恢复分流/精准合成 URL 彻底清除
+    │   ├── db.js                 # DB 多域名快照存储、版本控制与墓碑防复活机制
+    │   ├── gist.js               # GistSyncEngine GitHub Gist 双向云同步与防打扰空闲监听
+    │   ├── ui.js                 # LSM_UI 界面、悬浮球、设置窗口、主题编辑器、分片 QR 码
+    │   └── main.js               # 域名白名单/黑名单短路拦截、菜单命令与生命周期启动器
+    ├── build.js                  # 零依赖一键打包构建脚本 (node build.js)
+    ├── package.json              # 极速打包构建配置 (npm run build)
+    ├── index.user.js             # 构建生成的单文件发布脚本 (8500+ 行)
     ├── logo.gif                  # 标志图
     ├── README.md                 # 安全加密、存储与恢复指南
     └── UPDATE.md                 # 版本更新日志

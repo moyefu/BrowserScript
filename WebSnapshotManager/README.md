@@ -10,8 +10,10 @@
 ## 🌟 核心特性
 
 ### 1. 🔐 全维度快照捕获与恢复
-- **Cookie 全量与并发加速**：优先调用 `GM_cookie` API 获取全量（含 `HttpOnly`、`SameSite`、子域名及 Path 限制）Cookie，并在无权限时自动平滑降级为 `document.cookie`；读写与清空采用 `Promise.all` 批量并发处理，秒级极速还原。
+- **Cookie 标准化与跨浏览器抹平 (v1.5.0)**：精准采集与恢复 `Host-Only`、`PartitionKey` (CHIPS 分区 Cookie) 与 `SameSite`，去除多余前导点污染，彻底消除 Chrome / Edge / Firefox / ScriptCat / Tampermonkey 间由于带点泛域与无点主机 Cookie 导致的存储与恢复差异。
+- **精准合成 URL 彻底清空 (v1.5.0)**：根据每个 Cookie 的具体协议、域名与路径动态合成专属匹配 URL，解决带点泛域与特定路径 Cookie 清理失败残留的痛点；提供「彻底清理生效域」与「仅限当前子域」双重可选清理范围。
 - **Storage 完整还原**：同步捕获当前站点的 `localStorage` 与 `sessionStorage` 完整键值对。
+- **原生透明无损压缩 (v1.5.0)**：内置基于现代浏览器原生 `CompressionStream` 的无损压缩引擎，快照体积直降 70%~90%，突破油猴存储与 Gist 网络载荷上限。
 - **原子化数据切换**：在恢复目标快照前，会自动彻底清空旧凭据的所有 Cookie 与 Storage，避免不同快照互相污染导致串号或异常。
 - **智能跳转回保存页**：保存快照时自动记录来源页面 URL（`location.href`），恢复成功后可智能跳转或刷新回保存时的页面。
 
@@ -216,6 +218,38 @@
     "radiusBtn": "8px"
   }
 }
+```
+
+---
+
+## 🏗️ 模块化源码与极简构建 (Architecture & Build)
+
+本项目采用模块化工程设计，源码拆分并收录在 `src/` 目录中，支持零依赖快速打包：
+
+```text
+WebSnapshotManager/
+├── src/                      # 模块化工程源码
+│   ├── meta.js               # 脚本元数据头、UserConfig 配置定义与 CSP Trusted Types 策略
+│   ├── theme.js              # ThemeEngine 主题系统与官方/自定义主题导入导出
+│   ├── compress.js           # CompressionEngine 基于原生 CompressionStream 的无损压缩引擎
+│   ├── crypto.js             # CryptoEngine AES-GCM 256 位加密与多版本密钥派生
+│   ├── session.js            # SessionManager Cookie 标准化采集/恢复分流/精准合成 URL 彻底清除
+│   ├── db.js                 # DB 多域名快照存储、版本控制与墓碑防复活机制
+│   ├── gist.js               # GistSyncEngine GitHub Gist 双向云同步与防打扰空闲监听
+│   ├── ui.js                 # LSM_UI 界面、悬浮球、设置窗口、主题编辑器、分片 QR 码
+│   └── main.js               # 域名白名单/黑名单短路拦截、菜单命令与生命周期启动器
+├── build.js                  # 零依赖一键打包构建脚本
+├── package.json              # 极速打包构建配置
+└── index.user.js             # 编译输出的单文件用户脚本（发布使用）
+```
+
+### 构建命令
+```bash
+# 使用 npm 构建
+npm run build
+
+# 或直接使用 Node.js 零依赖构建 (仅需 8ms)
+node build.js
 ```
 
 ---
