@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         标签数量限制
 // @namespace    https://docs.scriptcat.org/
-// @version      0.5.1
-// @description  配置每行一条：网页地址 标签上限 new/old；支持通配符 * ；new 保留最新 N 个，old 保留最旧 N 个；通过 BroadcastChannel + localStorage + GM 三重通道进行并发探活与批量定向关闭，彻底杜绝幽灵标签与多关漏关
+// @version      0.5.3
+// @description  配置每行一条：网页地址 标签上限 new/old；支持通配符 * ；new 保留最新 N 个，old 保留最旧 N 个；通过 BroadcastChannel + localStorage + GM 三重通道进行并发探活、批量定向关闭与完备诊断日志
 // @author       MOYEFU
 // @match        http*://*/*
 // @grant        window.close
@@ -25,7 +25,7 @@ Config:
     description: 每行一条，格式：网页地址通配符 标签上限 new/old；支持通配符 * ；new 保留最新的 N 个标签，old 保留最旧的 N 个标签，超出上限的标签自动关闭
     type: textarea
     default: |
-      https://rewards.bing.com/dashboard 1 old
+      https://rewards.bing.com/dashboard* 1 old
       https://*.bing.com/search* 5 new
 
 ==/UserConfig== */
@@ -34,87 +34,150 @@ Config:
     'use strict';
 
     const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    const DEFAULT_CONFIG = `https://rewards.bing.com/dashboard 1 old\nhttps://*.bing.com/search* 5 new`;
 
-    // 1. 获取并解析配置规则
-    let tabLimitRaw = GM_getValue('Config.tab_limit_list', DEFAULT_CONFIG);
-    if (!tabLimitRaw) tabLimitRaw = DEFAULT_CONFIG;
-
-    const RULE_REG = /^(.+?)\s+(\d+)\s+(new|old)\s*$/;
-    let tabLimitRules = parseRules(tabLimitRaw);
-
-    function parseRules(raw) {
-        const rules = [];
-        raw.split('\n').forEach(line => {
-            line = line.trim();
-            if (!line || line.startsWith('#')) return;
-            const m = line.match(RULE_REG);
-            if (m) {
-                rules.push({
-                    pattern: m[1],
-                    limit: parseInt(m[2], 10),
-                    mode: m[3]
-                });
-            }
-        });
-        return rules;
-    }
-
-    if (tabLimitRules.length === 0) return;
-
-    const currentUrl = window.location.href;
-
-    // 通配符 * 转为正则
-    function wildcardToRegex(pattern) {
-        const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-        return new RegExp('^' + escaped + '$');
-    }
-
-    // 匹配命中当前 URL 的规则（取最严格的 limit，首条的 mode）
-    const matched = tabLimitRules.filter(rule => wildcardToRegex(rule.pattern).test(currentUrl));
-    if (matched.length === 0) return;
-
-    let effectiveLimit = Math.min(...matched.map(r => r.limit));
-    let effectiveMode = matched[0].mode;
-    const rulePattern = matched[0].pattern;
-
-    // 2. 标签身份与时间戳持久化（支持刷新 F5 与同标签跳转保留年龄）
-    const CHANNEL_BASE = 'tabLimit_' + encodeURIComponent(rulePattern);
-    const SESSION_ID_KEY = CHANNEL_BASE + '_id';
-    const SESSION_TS_KEY = CHANNEL_BASE + '_ts';
-
-    let myTabId;
-    let myBirthTs;
-
+    // 1. 严格限制仅在顶层窗口运行，全方位拦截并严禁在任何 iframe / 子框架中执行与通信
     try {
-        myTabId = win.sessionStorage ? win.sessionStorage.getItem(SESSION_ID_KEY) : null;
-        myBirthTs = win.sessionStorage ? parseInt(win.sessionStorage.getItem(SESSION_TS_KEY), 10) : null;
+        if (window.self !== window.top) return;
+        if (win.self !== win.top) return;
+        if (window.frameElement) return;
     } catch (e) {
-        // 部分无痕模式或安全设置下 sessionStorage 可能受限
+        // 跨域 iframe 访问 top / frameElement 触发安全异常，必为子框架，安全退出
+        return;
     }
 
-    if (!myTabId || !Number.isFinite(myBirthTs)) {
-        myTabId = Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-        myBirthTs = Date.now();
+    // 2. 防止同页面重复注入执行（如同时安装了开发版与发布版）
+    if (win.__tab_limit_running__ || window.__tab_limit_running__) return;
+    win.__tab_limit_running__ = true;
+    window.__tab_limit_running__ = true;
+
+    // 3. 浏览器预渲染挂起（Speculative Prerendering 保护）
+    // 若浏览器在后台进行投机预渲染（如 Bing 预测预加载），挂起到页面真正变为激活可见前，绝不提前探活或误杀
+    if (document.prerendering) {
+        document.addEventListener('prerenderingchange', () => {
+            initTabLimit();
+        }, { once: true });
+        return;
+    }
+
+    initTabLimit();
+
+    function initTabLimit() {
+        const DEFAULT_CONFIG = `https://rewards.bing.com/dashboard* 1 old\nhttps://*.bing.com/search* 5 new`;
+
+        // 1. 获取并解析配置规则
+        let tabLimitRaw = GM_getValue('Config.tab_limit_list', DEFAULT_CONFIG);
+        if (!tabLimitRaw) tabLimitRaw = DEFAULT_CONFIG;
+
+        const RULE_REG = /^(.+?)\s+(\d+)\s+(new|old)\s*$/;
+        let tabLimitRules = parseRules(tabLimitRaw);
+
+        function parseRules(raw) {
+            const rules = [];
+            raw.split('\n').forEach(line => {
+                line = line.trim();
+                if (!line || line.startsWith('#')) return;
+                const m = line.match(RULE_REG);
+                if (m) {
+                    rules.push({
+                        pattern: m[1],
+                        limit: parseInt(m[2], 10),
+                        mode: m[3]
+                    });
+                }
+            });
+            return rules;
+        }
+
+        if (tabLimitRules.length === 0) return;
+
+        const currentUrl = window.location.href;
+
+        // 通配符 * 转为正则（未显式包含 * 或 ? 时，自动兼容末尾斜杠、查询参数及锚点）
+        function wildcardToRegex(pattern) {
+            let escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+            if (!pattern.includes('*') && !pattern.includes('?') && !pattern.endsWith('/')) {
+                escaped += '(?:[/?#].*)?';
+            }
+            return new RegExp('^' + escaped + '$');
+        }
+
+        // 匹配命中当前 URL 的规则（取最严格的 limit，首条的 mode）
+        const matched = tabLimitRules.filter(rule => wildcardToRegex(rule.pattern).test(currentUrl));
+        if (matched.length === 0) return;
+
+        let effectiveLimit = Math.min(...matched.map(r => r.limit));
+        let effectiveMode = matched[0].mode;
+        const rulePattern = matched[0].pattern;
+
+        function log(...args) {
+            console.log('%c[TabLimit]', 'color:#3b82f6;font-weight:bold;', ...args);
+        }
+        function logWarn(...args) {
+            console.warn('%c[TabLimit]', 'color:#f59e0b;font-weight:bold;', ...args);
+        }
+
+        // 2. 标签身份与时间戳持久化（破除 Chromium 下 sessionStorage 跨标签拷贝克隆陷阱）
+        const CHANNEL_BASE = 'tabLimit_' + encodeURIComponent(rulePattern);
+        const SESSION_ID_KEY = CHANNEL_BASE + '_id';
+        const SESSION_TS_KEY = CHANNEL_BASE + '_ts';
+
+        let isReload = false;
         try {
-            if (win.sessionStorage) {
-                win.sessionStorage.setItem(SESSION_ID_KEY, myTabId);
-                win.sessionStorage.setItem(SESSION_TS_KEY, String(myBirthTs));
+            const navEntries = performance.getEntriesByType('navigation');
+            if (navEntries && navEntries.length > 0) {
+                isReload = navEntries[0].type === 'reload' || navEntries[0].type === 'back_forward';
             }
         } catch (e) {
             // ignore
         }
-    }
 
-    // 3. 三重实时通信总线（BroadcastChannel + localStorage storage事件 + GM跨域监听）
-    const bcChannelName = CHANNEL_BASE;
-    const storageEventKey = CHANNEL_BASE + '_ls_event';
-    const gmChannelKey = CHANNEL_BASE + '_gm_event';
+        let storedId = null;
+        let storedTs = null;
+        try {
+            if (win.sessionStorage) {
+                storedId = win.sessionStorage.getItem(SESSION_ID_KEY);
+                storedTs = parseInt(win.sessionStorage.getItem(SESSION_TS_KEY), 10);
+            }
+        } catch (e) {
+            // 部分无痕模式或安全设置下 sessionStorage 可能受限
+        }
 
-    let bc = null;
-    let gmListenerId = null;
-    let isClosing = false;
-    let isProbeRunning = false;
+        let myTabId;
+        let myBirthTs;
+
+        // 关键机制：在 Chromium 中，通过链接 target="_blank"、中键或 window.open 打开的新标签页会深拷贝父标签的 sessionStorage！
+        // 但 window.name 具有独立隔离性（新打开标签的 window.name 不会继承父窗口，除非显式指定）。
+        // 同时在当前页面 F5 刷新或同标签内前后导航时，window.name 100% 保持不变。
+        // 因此：仅当明确检测到刷新事件，或 win.name 与 storedId 一致时，才允许继承旧身份与旧时间戳；
+        // 否则一律判定为由链接/克隆衍生的新标签页，强制生成全新的唯一 tabId 与当前真实时间戳！
+        if (storedId && Number.isFinite(storedTs) && (win.name === storedId || isReload)) {
+            myTabId = storedId;
+            myBirthTs = storedTs;
+            try { win.name = storedId; } catch (e) {}
+        } else {
+            myTabId = Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            myBirthTs = Date.now();
+            try {
+                if (win.sessionStorage) {
+                    win.sessionStorage.setItem(SESSION_ID_KEY, myTabId);
+                    win.sessionStorage.setItem(SESSION_TS_KEY, String(myBirthTs));
+                }
+            } catch (e) {}
+            try { win.name = myTabId; } catch (e) {}
+        }
+
+        log(`命中规则 [${rulePattern}] | 限制: ${effectiveLimit} | 模式: ${effectiveMode} | TabId: ${myTabId} | 创建时间: ${new Date(myBirthTs).toLocaleTimeString()}`);
+
+        // 3. 三重实时通信总线（BroadcastChannel + localStorage storage事件 + GM跨域监听）
+        const bcChannelName = CHANNEL_BASE;
+        const storageEventKey = CHANNEL_BASE + '_ls_event';
+        const gmChannelKey = CHANNEL_BASE + '_gm_event';
+
+        let bc = null;
+        let gmListenerId = null;
+        let storageListener = null;
+        let isClosing = false;
+        let isProbeRunning = false;
 
     // 消息去重队列（防止多通道重复消费同一消息）
     const PROCESSED_MSG_MAX = 300;
@@ -209,7 +272,16 @@ Config:
             case 'KILL': {
                 // 收到定向关闭指令（支持单个 targetTabId 或批量 targetTabIds）
                 const targets = (msg.data && msg.data.targetTabIds) || (msg.data && msg.data.targetTabId ? [msg.data.targetTabId] : []);
+                const killTime = (msg.data && msg.data.killTime) || (msg.msgId ? parseInt(msg.msgId.split('_')[0], 10) : null);
+
+                // 防御性时效校验：忽略早于当前标签诞生前下发的陈旧失效指令（防止历史遗留广播回放误杀）
+                if (killTime && Number.isFinite(killTime) && killTime < myBirthTs - 100) {
+                    logWarn('忽略过期的陈旧 KILL 指令（早于标签创建）:', msg);
+                    break;
+                }
+
                 if (targets.includes(myTabId)) {
+                    logWarn('收到定向 KILL 指令，即将关闭当前标签页...');
                     closeSelf();
                 }
                 break;
@@ -242,7 +314,7 @@ Config:
 
     // 初始化 localStorage storage 事件监听
     try {
-        win.addEventListener('storage', evt => {
+        storageListener = evt => {
             if (evt.key === storageEventKey && evt.newValue) {
                 try {
                     const parsed = JSON.parse(evt.newValue);
@@ -251,7 +323,8 @@ Config:
                     // ignore
                 }
             }
-        });
+        };
+        win.addEventListener('storage', storageListener);
     } catch (e) {
         // ignore
     }
@@ -304,6 +377,8 @@ Config:
         collectedTabs.set(myTabId, { tabId: myTabId, birthTs: myBirthTs });
         activeProbes.set(probeId, collectedTabs);
 
+        log(`发起并发探活 (probeId: ${probeId})...`);
+
         // 广播探活请求
         broadcast('PING', { probeId: probeId, birthTs: myBirthTs });
 
@@ -327,8 +402,14 @@ Config:
         });
 
         const total = tabs.length;
+        log(`探活收集完成: 发现 ${total} 个存活标签 (上限: ${effectiveLimit}, 模式: ${effectiveMode})`, tabs.map(t => ({
+            tabId: t.tabId,
+            age: Math.round((Date.now() - t.birthTs) / 1000) + 's',
+            isSelf: t.tabId === myTabId
+        })));
+
         if (total <= effectiveLimit) {
-            // 未达到数量限制，无需操作
+            log(`标签总数 (${total}) <= 限制上限 (${effectiveLimit})，无需关闭，正常运行。`);
             return;
         }
 
@@ -347,10 +428,23 @@ Config:
         }
 
         const survivorIds = new Set(survivors.map(t => t.tabId));
+        logWarn(`标签数超限 (${total} > ${effectiveLimit})！保留集:`, survivors.map(s => s.tabId), '淘汰集:', toKill.map(k => k.tabId));
 
         // 判定自己是否需要关闭
         if (!survivorIds.has(myTabId)) {
+            // new 模式新生标签自杀保护屏障（Single Tab & New Tab Invariant）
+            // 若自己是刚诞生不到 2 秒的新标签，且探活收集列表中没有任何明显晚于自己（birthTs > myBirthTs + 100）的真实合法标签，
+            // 绝不允许自杀（防止因时钟抖动或微秒偏差误将最新的唯一/首要标签自杀导致全关）
+            if (effectiveMode === 'new' && (Date.now() - myBirthTs < 2000)) {
+                const newerTabs = tabs.filter(t => t.tabId !== myTabId && t.birthTs > myBirthTs + 100);
+                if (newerTabs.length < effectiveLimit) {
+                    logWarn('触发 new 模式新生标签保护屏障：当前标签刚创建且无更合法的后生标签，保留自身并终止自杀');
+                    return;
+                }
+            }
+
             // 自己不在保留集中（如 old 模式新打开的超额标签），立即极速关闭自己
+            logWarn(`当前标签属于淘汰集 (模式: ${effectiveMode})，执行关闭自身...`);
             closeSelf();
             return;
         }
@@ -358,7 +452,8 @@ Config:
         // 自己在保留集中：收集需要淘汰的目标标签 ID 数组，以【单个批量广播】一次性下发
         const targetTabIds = toKill.filter(v => v.tabId !== myTabId).map(v => v.tabId);
         if (targetTabIds.length > 0) {
-            broadcast('KILL', { targetTabIds: targetTabIds });
+            log(`当前标签属于保留集，向淘汰集定向发送 KILL 广播:`, targetTabIds);
+            broadcast('KILL', { targetTabIds: targetTabIds, killTime: Date.now() });
         }
     }
 
@@ -367,9 +462,19 @@ Config:
         if (isClosing) return;
         isClosing = true;
 
+        logWarn('正在执行 window.close()...');
+
         // 立即广播告知自身退出，并销毁监听（不再响应 PONG 占位）
         broadcast('BYE', { tabId: myTabId });
         destroyResources();
+
+        // 彻底清空 sessionStorage 中的身份标识，防止该窗口关闭后由于重用或恢复导致旧 ID 残留
+        try {
+            if (win.sessionStorage) {
+                win.sessionStorage.removeItem(SESSION_ID_KEY);
+                win.sessionStorage.removeItem(SESSION_TS_KEY);
+            }
+        } catch (e) {}
 
         try {
             window.close();
@@ -381,6 +486,7 @@ Config:
         // 若超过 1200ms 窗口仍未关闭（window.closed === false），才证明确实受浏览器安全限制拦截，再降级展示提示屏。
         setTimeout(() => {
             if (!window.closed) {
+                logWarn('window.close() 被浏览器拦截，降级展示提示屏引导手动关闭');
                 renderBlockScreen();
             }
         }, 1200);
@@ -463,6 +569,10 @@ Config:
             try { GM_removeValueChangeListener(gmListenerId); } catch (e) {}
             gmListenerId = null;
         }
+        if (storageListener && typeof win.removeEventListener === 'function') {
+            try { win.removeEventListener('storage', storageListener); } catch (e) {}
+            storageListener = null;
+        }
         if (safetyTicker) {
             clearInterval(safetyTicker);
             safetyTicker = null;
@@ -501,5 +611,5 @@ Config:
             triggerProbe();
         }
     }, 30000);
-
+}
 })();

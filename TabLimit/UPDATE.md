@@ -4,6 +4,40 @@
 
 ---
 
+## [0.5.3] - 2026-09-28
+
+### 🛡️ 彻底根除「最后一个标签被关闭与循环秒关」关键修复
+- **防范 Chromium sessionStorage 跨标签拷贝克隆陷阱（Clone Trap）**：
+  - 在 Chrome / Edge 中，通过中键、`target="_blank"` 或 `window.open` 打开的新标签页会自动深度克隆父标签的 `sessionStorage`，导致新标签错误继承父标签的 `tabId` 和历史时间戳；
+  - 引入 `window.name` 与 Navigation Timing（`performance.navigation`）联合校验算法：仅在明确检测到 F5 页面刷新或导航重载时才复用旧身份，凡由链接/克隆衍生的新标签一律强制生成独立全新 `tabId` 与实时创建时间戳，彻底根除 ID 撞车和时间倒挂问题。
+- **全方位拦截 Bing 复杂内嵌子框架（iframe）与后台投机预渲染（Speculative Prerendering）**：
+  - 增加四重顶层窗口校验（`window.top`, `win.top`, `frameElement` 及跨域 `SecurityError` 捕获），坚决杜绝 Bing 页面内嵌 Rewards / 登录 / 建议等隐藏 iframe 被识别为活跃标签杀死父窗口；
+  - 增加 `document.prerendering` 预渲染挂起保护，浏览器在后台预测预加载搜索页时挂起到真正激活可见，绝不抢占生命周期或误杀前台活动标签。
+- **历史陈旧 KILL 广播时效性校验**：
+  - KILL 指令增加 `killTime` 时间戳，接收端严格过滤并丢弃早于当前标签创建时间（`myBirthTs - 100ms`）的陈旧失效指令，防止 GM 存储残留消息回放误杀。
+- **新增 new 模式新生标签自杀保护屏障（Newborn Barrier）**：
+  - 刚诞生不到 2 秒的新标签页，若探活收集列表中不存在明确比自己更新（`birthTs > myBirthTs + 100`）的存活标签，严禁自杀，数学和逻辑上绝对确保唯一的最后一个标签页永远不会自杀。
+- **退出时 sessionStorage 深度清理与 storage 事件解绑**：
+  - 标签执行关闭时彻底注销 `storage` 事件监听，并清理 `sessionStorage` 标识，避免窗口重用或恢复时历史旧 ID 残留。
+
+---
+
+## [0.5.2] - 2026-09-24
+
+### 🔍 诊断日志与智能 URL 匹配优化
+- **新增完备的前台控制台排障日志（`[TabLimit]` 前缀）**：
+  - 自动输出匹配规则、生效上限与保留模式（`new`/`old`）；
+  - 输出探活探测过程、当前所有存活标签的 ID、运行存活年龄及判定结果（保留/关闭）；
+  - 定向下发 KILL 指令与收到 KILL 淘汰时均打印明确警示日志，方便在 F12 控制台一目了然排查是否为本脚本关闭或其他脚本干扰。
+- **智能兼容 URL 尾部斜杠、查询参数与锚点**：
+  - 若用户填写的规则未显式包含 `*` 或 `?` 且未以 `/` 结尾（如 `https://rewards.bing.com/dashboard`），自动兼容带斜杠、参数（`?ref=...`）或哈希的跳转地址，防止因重定向失配。
+- **默认配置推荐通配符**：
+  - 默认配置示例更新为 `https://rewards.bing.com/dashboard* 1 old`。
+- **外部脚本冲突排查与历史死锁清理**：
+  - 排查并修复了 `test/bing/dailyset.user.js` 中遗留的历史单标签旧逻辑（其采用 `beforeunload` 写 GM 锁，标签意外退出时锁永不释放，导致后续即使没有标签也会被其硬编码的 `setTimeout(window.close, 300)` 误关），实现向 TabLimit 的平滑过渡。
+
+---
+
 ## [0.5.1] - 2026-09-18
 
 ### 🐛 修复高并发批量开标签场景下的漏关与误提示问题

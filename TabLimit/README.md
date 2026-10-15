@@ -27,9 +27,11 @@
 - **定向下发指令**：新标签汇总存活标签后，精准向超额的目标标签下发 `KILL` 指令；即使旧标签在后台休眠，也能被事件总线瞬间唤醒并极速关闭。
 - **极速响应**：判定超限后 0~100ms 极速 `window.close()`，避免页面加载耗费 CPU/流量与视觉闪烁。
 
-### 5. 🔄 刷新与同标签跳转记忆
-- 通过 `sessionStorage` 固化当前标签的唯一 `tabId` 和初始创建时间戳 `ts`。
-- 用户按 F5 刷新或在当前标签内点击相同规则的链接时，保持其原始标签年龄，避免刷新导致年龄重置或意外关闭。
+### 5. 🔄 刷新记忆与防克隆唯一身份保障
+- 采用 `sessionStorage` 结合 `window.name` 与 Navigation Timing 联合校验算法：
+  - 彻底破解 Chromium 在通过链接（`target="_blank"`）、鼠标中键或 `window.open` 打开新标签时深拷贝 `sessionStorage` 导致的 ID 撞车与时间倒挂；
+  - 凡由链接/克隆衍生的新标签一律强制生成独立全新 `tabId` 与实时时间戳；
+  - 仅在用户按 F5 刷新或当前标签重载时精准保留其原始身份与年龄，避免误关。
 
 ### 6. 🛑 浏览器安全限制优雅拦截
 - 若标签因浏览器安全策略限制（如直接在地址栏输入或书签打开的标签）导致 `window.close()` 无法静默关闭；
@@ -49,8 +51,8 @@
 ### 规则语法与示例
 
 ```text
-# 1. 保留最旧 2 个 dashboard 标签（适合主标签常驻场景）
-https://rewards.bing.com/dashboard 2 old
+# 1. 保留最旧 1 个 dashboard 标签（适合主标签常驻场景，推荐末尾加 * 兼容查询参数与跳转）
+https://rewards.bing.com/dashboard* 1 old
 
 # 2. 保留最新 5 个 bing 搜索标签（适合搜索会话保留场景）
 https://*.bing.com/search* 5 new

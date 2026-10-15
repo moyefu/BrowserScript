@@ -11,7 +11,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
-// @tag          MYF
+// @tag          MOYEFU
 // @run-at       document-idle
 // @icon         https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=25&letterSpacing=1&duration=500&pause=500&color=F7009F&background=00D7FF00&vCenter=true&random=true&width=28&height=28&lines=AI
 // @noframes
