@@ -18,6 +18,7 @@ on:
           - 'BlockWebsites'
           - 'CpaToGrok2Api'
           - 'WebSnapshotManager'
+          - 'DouyinChat'
           - 'all'
       custom_version:
         description: '自定义版本号（例如 0.5.1，留空则自动从源码 @version 读取）'
