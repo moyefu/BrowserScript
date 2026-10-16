@@ -2,7 +2,7 @@
 // @name         DouyinChat - 抖音聊天消息推送通知
 // @namespace    http://tampermonkey.net/
 // @author       MOYEFU
-// @version      1.4.0
+// @version      1.5.0
 // @description  抖音聊天页未读消息桌面通知推送；时间标签「刚刚」识别新消息；私密模式防窥屏；网页标题未读数同步
 // @match        https://www.douyin.com/chat
 // @tag          MOYEFU
@@ -79,8 +79,8 @@
 
             // 取第一条带未读标记的角标（DOM 中第一个，通常对应最新或置顶会话）
             const firstUnreadBadge = unreadBadges[0];
-            // 向上查找该角标所属的会话项容器，用于提取会话名/头像等
-            const conversationItem = firstUnreadBadge.closest('[class*="conversationConversationItem"]');
+            // 向上查找该角标所属的会话项顶层容器（data-index 仅出现在会话项最外层 div，比 class 子串匹配更精确）
+            const conversationItem = firstUnreadBadge.closest('[data-index]');
             // 找不到会话项时直接返回
             if (!conversationItem) return;
 
@@ -90,8 +90,10 @@
             const hintEl = conversationItem.querySelector('.ConversationItemHinttextBox');
             // 提取会话项内的时间标签，抖音会话项右侧的时间文本（如"刚刚"、"1分钟前"、"昨天"等）
             const timeStrEl = conversationItem.querySelector('.ConversationItemTagNextToTitletimeStr');
-            // 提取全局第一个头像图片（抖音侧边栏头像）
-            const avatarImgEl = document.querySelector('.commonIMAvataravatarContainer img');
+            // 提取当前会话项内的头像图片（统一选择器，兼容群聊与私聊）
+            // 群聊：.conversationConversationItemrowArea1 img 直接命中
+            // 私聊：.conversationConversationItemrowArea1 .commonIMAvataravatarContainer img 命中
+            const avatarImgEl = conversationItem.querySelector('.conversationConversationItemrowArea1 img');
 
             // 发件人名称（trim 去除首尾空白，兜底为空字符串）
             const senderName = titleEl?.textContent?.trim() || '';

@@ -30,7 +30,11 @@
 - 300ms 防抖机制过滤高频 DOM 变动，避免重复检测浪费 CPU。
 - 1200ms 启动延迟，等待抖音 SPA 首屏 DOM 渲染完成后再挂载监听，确保 `querySelector` 命中。
 
-### 6. 🧪 可选控制台调试日志
+### 6. 👥 群聊与私聊头像统一提取
+- 通过 `closest('[data-index]')` 精准定位会话项顶层容器，避免 class 子串匹配误命中中间层。
+- 使用 `.conversationConversationItemrowArea1 img` 统一选择器提取头像，群聊（直接 `img`）与私聊（嵌套 `span > img`）均能命中。
+
+### 7. 🧪 可选控制台调试日志
 - 开启 `consoleLog` 配置后，在浏览器 F12 控制台输出聚焦状态、时间标签、key 值、总未读数等调试信息，便于排查误判问题。
 
 ---

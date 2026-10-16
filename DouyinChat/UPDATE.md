@@ -4,6 +4,14 @@
 
 ---
 
+## [1.5.0] - 2026-10-16
+
+### 👥 群聊与私聊头像统一提取
+- **会话项顶层容器定位优化**：`closest('[class*="conversationConversationItem"]')` 改为 `closest('[data-index]')`，精准命中会话项最外层 div，避免 class 子串匹配误命中 `rowArea` 等中间层导致子元素查询失效；
+- **头像选择器统一**：从 `document.querySelector('.commonIMAvataravatarContainer img')`（全局取第一个，仅命中私聊）改为 `conversationItem.querySelector('.conversationConversationItemrowArea1 img')`，后代选择器同时兼容群聊（`rowArea1 > img`）与私聊（`rowArea1 > div > span > img`）两种 DOM 结构。
+
+---
+
 ## [1.4.0] - 2026-10-15
 
 ### 🏷️ 项目正式收录

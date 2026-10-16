@@ -27,7 +27,7 @@
 | [**CpaToGrok2Api**](./CpaToGrok2Api) <br> **Grok CPA 转 Grok2Api Json** | `v0.1.0` | CPA 站点 | 自动感知 CPA 登录状态；实时并发检测 xAI 账号额度；纯前端原生解析 JWT Payload；一键转换并批量导出标准 Grok2Api JSON。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/CpaToGrok2Api-latest/CpaToGrok2Api.min.user.js) | [查看文档](./CpaToGrok2Api/README.md) |
 | [**BlockWebsites**](./BlockWebsites) <br> **禁止打开的网页 (防沉迷)** | `v0.4.0` | 通用全站 | 灵活的网址通配符匹配；支持 `(HH-HH)`、`(HH:MM-HH:MM)`、`(HH:MM:SS-HH:MM:SS)` 多精度时间段限制；秒级自动关闭网页与降级拦截屏。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/BlockWebsites-latest/BlockWebsites.min.user.js) | [查看文档](./BlockWebsites/README.md) |
 | [**TabLimit**](./TabLimit) <br> **标签数量限制** | `v0.5.1` | 通用全站 | 按规则维护标签登记表；支持 `new` / `old` 双模式保留策略；BroadcastChannel + localStorage + GM 三通道高并发探活，超出上限自动关闭。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/TabLimit-latest/TabLimit.min.user.js) | [查看文档](./TabLimit/README.md) |
-| [**DouyinChat**](./DouyinChat) <br> **抖音聊天消息推送通知** | `v1.4.0` | 抖音聊天页 | DOM 监听未读角标；时间标签「刚刚」识别新消息；私密模式防窥屏；右侧面板隐藏防自动已读；网页标题未读数同步。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/DouyinChat-latest/DouyinChat.min.user.js) | [查看文档](./DouyinChat/README.md) |
+| [**DouyinChat**](./DouyinChat) <br> **抖音聊天消息推送通知** | `v1.5.0` | 抖音聊天页 | DOM 监听未读角标；时间标签「刚刚」识别新消息；群聊/私聊头像统一提取；私密模式防窥屏；右侧面板隐藏防自动已读；网页标题未读数同步。 | [⚡ 一键安装 (min)](https://github.com/moyefu/BrowserScript/releases/download/DouyinChat-latest/DouyinChat.min.user.js) | [查看文档](./DouyinChat/README.md) |
 
 ---
 
